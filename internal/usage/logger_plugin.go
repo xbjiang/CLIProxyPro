@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/kacontext"
 	coreusage "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 )
 
@@ -89,11 +90,12 @@ type modelStats struct {
 
 // RequestDetail stores the timestamp and token usage for a single request.
 type RequestDetail struct {
-	Timestamp time.Time  `json:"timestamp"`
-	Source    string     `json:"source"`
-	AuthIndex string     `json:"auth_index"`
-	Tokens    TokenStats `json:"tokens"`
-	Failed    bool       `json:"failed"`
+	Timestamp   time.Time  `json:"timestamp"`
+	Source      string     `json:"source"`
+	AuthIndex   string     `json:"auth_index"`
+	Tokens      TokenStats `json:"tokens"`
+	Failed      bool       `json:"failed"`
+	IsKeepalive bool       `json:"is_keepalive"`
 }
 
 // TokenStats captures the token usage breakdown for a request.
@@ -197,11 +199,12 @@ func (s *RequestStatistics) Record(ctx context.Context, record coreusage.Record)
 		s.apis[statsKey] = stats
 	}
 	s.updateAPIStats(stats, modelName, RequestDetail{
-		Timestamp: timestamp,
-		Source:    record.Source,
-		AuthIndex: record.AuthIndex,
-		Tokens:    detail,
-		Failed:    failed,
+		Timestamp:   timestamp,
+		Source:      record.Source,
+		AuthIndex:   record.AuthIndex,
+		Tokens:      detail,
+		Failed:      failed,
+		IsKeepalive: kacontext.IsKeepaliveContext(ctx),
 	})
 
 	s.requestsByDay[dayKey]++

@@ -339,3 +339,39 @@ func (h *Handler) updateStringField(c *gin.Context, set func(string)) {
 	set(*body.Value)
 	h.persist(c)
 }
+
+// GetCurrentAccount returns the email of the account used in the most recent successful request.
+// It infers the current account from the latest non-failed request in the usage statistics.
+func (h *Handler) GetCurrentAccount(c *gin.Context) {
+	if h == nil || h.usageStats == nil {
+		c.JSON(http.StatusOK, gin.H{"email": nil})
+		return
+	}
+
+	snapshot := h.usageStats.Snapshot()
+	var latestEmail string
+	var latestTime time.Time
+
+	// Iterate through all APIs and models to find the most recent successful request
+	for _, apiSnap := range snapshot.APIs {
+		for _, modelSnap := range apiSnap.Models {
+			for _, detail := range modelSnap.Details {
+				// Skip failed requests and keepalive requests
+				if detail.Failed || detail.IsKeepalive {
+					continue
+				}
+				if detail.Timestamp.After(latestTime) {
+					latestTime = detail.Timestamp
+					latestEmail = detail.Source
+				}
+			}
+		}
+	}
+
+	if latestEmail == "" {
+		c.JSON(http.StatusOK, gin.H{"email": nil})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"email": latestEmail})
+}

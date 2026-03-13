@@ -592,6 +592,8 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/routing/strategy", s.mgmt.PutRoutingStrategy)
 		mgmt.PATCH("/routing/strategy", s.mgmt.PutRoutingStrategy)
 
+		mgmt.GET("/current-account", s.mgmt.GetCurrentAccount)
+
 		// Persistence-backed endpoints (served by Go, no Node.js proxy)
 		mgmt.GET("/usage/merged", s.mgmt.GetUsageMerged)
 		mgmt.GET("/usage/daily", s.mgmt.GetUsageDaily)
