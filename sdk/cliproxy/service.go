@@ -5,6 +5,7 @@ package cliproxy
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/keepalive"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
@@ -98,6 +100,32 @@ type Service struct {
 //   - plugin: The usage plugin to register
 func (s *Service) RegisterUsagePlugin(plugin usage.Plugin) {
 	usage.RegisterPlugin(plugin)
+}
+
+// CoreManager returns the core auth manager instance.
+func (s *Service) CoreManager() *coreauth.Manager {
+	if s == nil {
+		return nil
+	}
+	return s.coreManager
+}
+
+// SetPersistenceDB injects the SQLite database into the management handler.
+// Must be called from the OnAfterStart hook after the server is ready.
+func (s *Service) SetPersistenceDB(db *sql.DB) {
+	if s == nil || s.server == nil {
+		return
+	}
+	s.server.SetPersistenceDB(db)
+}
+
+// SetKeepaliveScheduler injects the keepalive scheduler into the management handler.
+// Must be called from the OnAfterStart hook after the server is ready.
+func (s *Service) SetKeepaliveScheduler(sched *keepalive.Scheduler) {
+	if s == nil || s.server == nil {
+		return
+	}
+	s.server.SetKeepaliveScheduler(sched)
 }
 
 // newDefaultAuthManager creates a default authentication manager with all supported providers.
@@ -292,6 +320,14 @@ func (s *Service) applyCoreAuthAddOrUpdate(ctx context.Context, auth *coreauth.A
 		auth.NextRefreshAfter = existing.NextRefreshAfter
 		if len(auth.ModelStates) == 0 && len(existing.ModelStates) > 0 {
 			auth.ModelStates = existing.ModelStates
+		}
+		// Preserve runtime quota state: auth files on disk never carry NextRetryAfter
+		// or Unavailable. Without this, every watcher reload clears the quota cooldown
+		// that was injected from SQLite on startup (or set by a live 429 response).
+		if auth.NextRetryAfter.IsZero() && !existing.NextRetryAfter.IsZero() {
+			auth.NextRetryAfter = existing.NextRetryAfter
+			auth.Unavailable = existing.Unavailable
+			auth.Quota = existing.Quota
 		}
 		op = "update"
 		_, err = s.coreManager.Update(ctx, auth)

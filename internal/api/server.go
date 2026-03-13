@@ -7,6 +7,7 @@ package api
 import (
 	"context"
 	"crypto/subtle"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -25,6 +26,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/modules"
 	ampmodule "github.com/router-for-me/CLIProxyAPI/v6/internal/api/modules/amp"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/keepalive"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
@@ -590,6 +592,11 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/routing/strategy", s.mgmt.PutRoutingStrategy)
 		mgmt.PATCH("/routing/strategy", s.mgmt.PutRoutingStrategy)
 
+		// Persistence-backed endpoints (served by Go, no Node.js proxy)
+		mgmt.GET("/usage/merged", s.mgmt.GetUsageMerged)
+		mgmt.GET("/usage/daily", s.mgmt.GetUsageDaily)
+		mgmt.GET("/keepalive/status", s.mgmt.GetKeepaliveStatus)
+
 		mgmt.GET("/claude-api-key", s.mgmt.GetClaudeKeys)
 		mgmt.PUT("/claude-api-key", s.mgmt.PutClaudeKeys)
 		mgmt.PATCH("/claude-api-key", s.mgmt.PatchClaudeKey)
@@ -1018,6 +1025,22 @@ func (s *Server) SetWebsocketAuthChangeHandler(fn func(bool, bool)) {
 		return
 	}
 	s.wsAuthChanged = fn
+}
+
+// SetPersistenceDB injects the SQLite database into the management handler.
+func (s *Server) SetPersistenceDB(db *sql.DB) {
+	if s == nil || s.mgmt == nil {
+		return
+	}
+	s.mgmt.SetPersistenceDB(db)
+}
+
+// SetKeepaliveScheduler injects the keepalive scheduler into the management handler.
+func (s *Server) SetKeepaliveScheduler(sched *keepalive.Scheduler) {
+	if s == nil || s.mgmt == nil {
+		return
+	}
+	s.mgmt.SetKeepaliveScheduler(sched)
 }
 
 // (management handlers moved to internal/api/handlers/management)

@@ -1,0 +1,81 @@
+// Package persistence provides SQLite-backed persistence for usage records,
+// account states, and key-value settings for the CLI Proxy API server.
+package persistence
+
+import (
+	"database/sql"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	_ "modernc.org/sqlite"
+)
+
+// Open opens (or creates) the SQLite database at the given path and initialises
+// the schema. The caller is responsible for closing the returned *sql.DB.
+func Open(dataDir string) (*sql.DB, error) {
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return nil, fmt.Errorf("persistence: create data dir %s: %w", dataDir, err)
+	}
+	dbPath := filepath.Join(dataDir, "stats.db")
+	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_foreign_keys=on")
+	if err != nil {
+		return nil, fmt.Errorf("persistence: open db %s: %w", dbPath, err)
+	}
+	db.SetMaxOpenConns(1) // SQLite is single-writer
+	if err := InitSchema(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+// InitSchema creates all tables and indexes if they do not yet exist.
+func InitSchema(db *sql.DB) error {
+	const schema = `
+CREATE TABLE IF NOT EXISTS usage_records (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    dedup_hash       TEXT NOT NULL UNIQUE,
+    api_key          TEXT NOT NULL DEFAULT '',
+    model            TEXT NOT NULL DEFAULT '',
+    timestamp        TEXT NOT NULL,
+    source           TEXT,
+    auth_index       TEXT,
+    auth_id          TEXT,
+    provider         TEXT,
+    input_tokens     INTEGER DEFAULT 0,
+    output_tokens    INTEGER DEFAULT 0,
+    reasoning_tokens INTEGER DEFAULT 0,
+    cached_tokens    INTEGER DEFAULT 0,
+    total_tokens     INTEGER DEFAULT 0,
+    failed           INTEGER DEFAULT 0,
+    is_keepalive     INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_ur_timestamp  ON usage_records(timestamp);
+CREATE INDEX IF NOT EXISTS idx_ur_auth_index ON usage_records(auth_index);
+
+CREATE TABLE IF NOT EXISTS account_states (
+    auth_index        TEXT PRIMARY KEY,
+    auth_id           TEXT NOT NULL,
+    email             TEXT,
+    name              TEXT,
+    label             TEXT,
+    unavailable       INTEGER DEFAULT 0,
+    disabled          INTEGER DEFAULT 0,
+    next_retry_after  TEXT,
+    quota_backoff_lvl INTEGER DEFAULT 0,
+    status            TEXT DEFAULT 'unknown',
+    status_message    TEXT,
+    updated_at        TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+`
+	if _, err := db.Exec(schema); err != nil {
+		return fmt.Errorf("persistence: init schema: %w", err)
+	}
+	return nil
+}
