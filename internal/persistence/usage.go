@@ -218,3 +218,113 @@ func DeleteOld(db *sql.DB, olderThan time.Duration) (int64, error) {
 	}
 	return res.RowsAffected()
 }
+
+// UsageRecord represents a single usage record from the database.
+type UsageRecord struct {
+	Timestamp       string `json:"timestamp"`
+	Source          string `json:"source"`
+	Model           string `json:"model"`
+	Failed          bool   `json:"failed"`
+	IsKeepalive     bool   `json:"is_keepalive"`
+	InputTokens     int64  `json:"input_tokens"`
+	OutputTokens    int64  `json:"output_tokens"`
+	ReasoningTokens int64  `json:"reasoning_tokens"`
+	CachedTokens    int64  `json:"cached_tokens"`
+	TotalTokens     int64  `json:"total_tokens"`
+}
+
+// QueryByDateRange returns aggregated stats and detailed logs for a date range.
+func QueryByDateRange(ctx context.Context, db *sql.DB, startDate, endDate string) (*AggregatedStats, []UsageRecord, error) {
+	stats := &AggregatedStats{}
+
+	// Aggregated stats for the date range
+	row := db.QueryRowContext(ctx, `
+		SELECT
+			COUNT(*),
+			COALESCE(SUM(total_tokens),0),
+			COALESCE(SUM(input_tokens),0),
+			COALESCE(SUM(output_tokens),0),
+			COALESCE(SUM(reasoning_tokens),0),
+			COALESCE(SUM(cached_tokens),0),
+			COALESCE(SUM(CASE WHEN failed=1 THEN 1 ELSE 0 END),0)
+		FROM usage_records
+		WHERE DATE(timestamp) >= ? AND DATE(timestamp) <= ?`,
+		startDate, endDate)
+	if err := row.Scan(
+		&stats.TotalRequests,
+		&stats.TotalTokens,
+		&stats.InputTokens,
+		&stats.OutputTokens,
+		&stats.ReasoningTokens,
+		&stats.CachedTokens,
+		&stats.FailedRequests,
+	); err != nil {
+		return nil, nil, err
+	}
+
+	// By model
+	rows, err := db.QueryContext(ctx, `
+		SELECT model, COUNT(*), COALESCE(SUM(total_tokens),0), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0)
+		FROM usage_records
+		WHERE DATE(timestamp) >= ? AND DATE(timestamp) <= ?
+		GROUP BY model ORDER BY COUNT(*) DESC LIMIT 50`,
+		startDate, endDate)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ms ModelStat
+		if err := rows.Scan(&ms.Model, &ms.Requests, &ms.TotalTokens, &ms.InputTokens, &ms.OutputTokens); err != nil {
+			return nil, nil, err
+		}
+		stats.ByModel = append(stats.ByModel, ms)
+	}
+
+	// By auth index
+	rows2, err := db.QueryContext(ctx, `
+		SELECT COALESCE(auth_index,''), COALESCE(auth_id,''), COUNT(*), COALESCE(SUM(total_tokens),0)
+		FROM usage_records
+		WHERE DATE(timestamp) >= ? AND DATE(timestamp) <= ?
+		GROUP BY auth_index ORDER BY COUNT(*) DESC LIMIT 100`,
+		startDate, endDate)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows2.Close()
+	for rows2.Next() {
+		var as AuthIndexStat
+		if err := rows2.Scan(&as.AuthIndex, &as.AuthID, &as.Requests, &as.TotalTokens); err != nil {
+			return nil, nil, err
+		}
+		stats.ByAuthIndex = append(stats.ByAuthIndex, as)
+	}
+
+	// Detailed logs (ordered by timestamp desc, limit 1000)
+	rows3, err := db.QueryContext(ctx, `
+		SELECT timestamp, COALESCE(source,''), model, failed, is_keepalive,
+			   input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens
+		FROM usage_records
+		WHERE DATE(timestamp) >= ? AND DATE(timestamp) <= ?
+		ORDER BY timestamp DESC LIMIT 1000`,
+		startDate, endDate)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows3.Close()
+
+	var logs []UsageRecord
+	for rows3.Next() {
+		var rec UsageRecord
+		var failedInt, keepaliveInt int
+		if err := rows3.Scan(&rec.Timestamp, &rec.Source, &rec.Model, &failedInt, &keepaliveInt,
+			&rec.InputTokens, &rec.OutputTokens, &rec.ReasoningTokens, &rec.CachedTokens, &rec.TotalTokens); err != nil {
+			return nil, nil, err
+		}
+		rec.Failed = failedInt == 1
+		rec.IsKeepalive = keepaliveInt == 1
+		logs = append(logs, rec)
+	}
+
+	return stats, logs, nil
+}

@@ -597,6 +597,7 @@ func (s *Server) registerManagementRoutes() {
 		// Persistence-backed endpoints (served by Go, no Node.js proxy)
 		mgmt.GET("/usage/merged", s.mgmt.GetUsageMerged)
 		mgmt.GET("/usage/daily", s.mgmt.GetUsageDaily)
+		mgmt.GET("/usage/range", s.mgmt.GetUsageByDateRange)
 		mgmt.GET("/keepalive/status", s.mgmt.GetKeepaliveStatus)
 
 		mgmt.GET("/claude-api-key", s.mgmt.GetClaudeKeys)

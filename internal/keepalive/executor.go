@@ -12,6 +12,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/kacontext"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -82,13 +83,13 @@ func (e *Executor) Execute(ctx context.Context) int {
 }
 
 // getTargetAccounts returns auth IDs for accounts whose quota window has reset
-// (next_retry_after <= now) and are still marked unavailable in SQLite.
+// (next_retry_after <= now). We don't check unavailable flag because it may be
+// out of sync - next_retry_after is the authoritative signal for quota reset.
 func (e *Executor) getTargetAccounts(ctx context.Context) ([]string, error) {
 	rows, err := e.db.QueryContext(ctx, `
 		SELECT auth_id FROM account_states
-		WHERE unavailable = 1
-		  AND next_retry_after IS NOT NULL
-		  AND next_retry_after <= datetime('now')
+		WHERE next_retry_after IS NOT NULL
+		  AND datetime(next_retry_after) <= datetime('now')
 	`)
 	if err != nil {
 		return nil, err
@@ -130,6 +131,7 @@ func (e *Executor) sendKeepaliveRequest(ctx context.Context, authID string) erro
 	}
 
 	opts := cliproxyexecutor.Options{
+		SourceFormat: sdktranslator.FromString("openai"),
 		Metadata: map[string]any{
 			cliproxyexecutor.PinnedAuthMetadataKey: authID,
 		},

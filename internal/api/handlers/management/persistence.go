@@ -80,6 +80,35 @@ func (h *Handler) GetKeepaliveStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// GetUsageByDateRange returns aggregated stats and logs for a specific date range.
+// GET /v0/management/usage/range?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
+func (h *Handler) GetUsageByDateRange(c *gin.Context) {
+	db := h.getPersistenceDB()
+	if db == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "persistence not available"})
+		return
+	}
+
+	startDate := c.Query("start_date")
+	endDate := c.Query("end_date")
+
+	if startDate == "" || endDate == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "start_date and end_date are required (format: YYYY-MM-DD)"})
+		return
+	}
+
+	stats, logs, err := persistence.QueryByDateRange(c.Request.Context(), db, startDate, endDate)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"stats": stats,
+		"logs":  logs,
+	})
+}
+
 // getPersistenceDB returns the db field (nil-safe).
 func (h *Handler) getPersistenceDB() *sql.DB {
 	h.mu.Lock()

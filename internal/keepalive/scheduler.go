@@ -3,7 +3,6 @@ package keepalive
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"sync"
 	"time"
 
@@ -16,7 +15,6 @@ const (
 	batchWindowDuration = 30 * time.Minute
 	fireDelayAfterBatch = 5 * time.Minute
 	compensationDelay   = 5 * time.Minute
-	compensationWindow  = 2 * time.Hour
 )
 
 // Scheduler computes keepalive batch fire times and executes them automatically.
@@ -128,6 +126,8 @@ func (s *Scheduler) fire(ctx context.Context) {
 		s.mu.Lock()
 		s.running = false
 		s.mu.Unlock()
+		// After execution, reschedule for future resets
+		s.Reschedule(context.Background())
 	}()
 
 	log.Info("keepalive: starting execution")
@@ -138,46 +138,28 @@ func (s *Scheduler) fire(ctx context.Context) {
 }
 
 // StartWithCompensation checks for accounts that reset while the service was
-// down (within the last compensationWindow) and schedules a catch-up execution
-// after compensationDelay if any are found.
+// down and schedules a catch-up execution after compensationDelay if any are found.
+// It compensates ALL missed keepalives regardless of how long ago they occurred.
 func (s *Scheduler) StartWithCompensation(ctx context.Context) {
-	lastKA, _ := s.getLastKeepaliveAt()
+	log.Info("keepalive: StartWithCompensation begin")
 
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT next_retry_after FROM account_states
-		WHERE unavailable = 1
-		  AND next_retry_after IS NOT NULL
-		  AND next_retry_after > datetime('now', ? || ' hours')
-		  AND next_retry_after <= datetime('now')`,
-		fmt.Sprintf("-%d", int(compensationWindow.Hours())),
-	)
+	// Simple query: just check if there are any expired accounts
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM account_states
+		WHERE next_retry_after IS NOT NULL
+		  AND datetime(next_retry_after) <= datetime('now')
+	`).Scan(&count)
+
 	if err != nil {
-		log.Debugf("keepalive: compensation query: %v", err)
+		log.Warnf("keepalive: compensation query error: %v", err)
 		s.Reschedule(ctx)
 		return
 	}
-	defer rows.Close()
 
-	needComp := false
-	for rows.Next() {
-		var nra string
-		if err := rows.Scan(&nra); err != nil {
-			continue
-		}
-		t, err := time.Parse(time.RFC3339, nra)
-		if err != nil {
-			continue
-		}
-		// Already covered by a keepalive after the reset?
-		if !lastKA.IsZero() && lastKA.After(t) {
-			continue
-		}
-		needComp = true
-		break
-	}
-	_ = rows.Err()
+	log.Infof("keepalive: found %d accounts with expired next_retry_after", count)
 
-	if needComp {
+	if count > 0 {
 		fireAt := time.Now().Add(compensationDelay)
 		log.Infof("keepalive: compensation scheduled at %s", fireAt.Local().Format(time.RFC3339))
 		s.mu.Lock()
@@ -185,8 +167,10 @@ func (s *Scheduler) StartWithCompensation(ctx context.Context) {
 		s.mu.Unlock()
 	}
 
+	log.Info("keepalive: StartWithCompensation calling Reschedule")
 	// Also schedule normally for future resets
 	s.Reschedule(ctx)
+	log.Info("keepalive: StartWithCompensation complete")
 }
 
 func (s *Scheduler) getLastKeepaliveAt() (time.Time, error) {
@@ -203,9 +187,8 @@ func (s *Scheduler) getLastKeepaliveAt() (time.Time, error) {
 func (s *Scheduler) computeNextBatch(ctx context.Context) (time.Time, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT next_retry_after FROM account_states
-		WHERE unavailable = 1
-		  AND next_retry_after IS NOT NULL
-		  AND next_retry_after > datetime('now')
+		WHERE next_retry_after IS NOT NULL
+		  AND datetime(next_retry_after) > datetime('now')
 		ORDER BY next_retry_after ASC
 	`)
 	if err != nil {
