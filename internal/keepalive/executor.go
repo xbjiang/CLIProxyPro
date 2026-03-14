@@ -52,6 +52,7 @@ func (e *Executor) Execute(ctx context.Context) int {
 
 	log.Infof("keepalive: sending %d requests", len(targets))
 	sent := 0
+	now := time.Now()
 	for i, authID := range targets {
 		if ctx.Err() != nil {
 			break
@@ -61,6 +62,12 @@ func (e *Executor) Execute(ctx context.Context) int {
 		} else {
 			sent++
 			log.Infof("keepalive: sent request %d/%d for auth %s", i+1, len(targets), authID)
+			// Record the send time in database
+			if e.db != nil {
+				if err := e.recordKeepaliveSentAt(authID, now); err != nil {
+					log.Warnf("keepalive: failed to record sent_at for %s: %v", authID, err)
+				}
+			}
 		}
 		if i < len(targets)-1 {
 			delay := time.Duration(3000+rand.Intn(3001)) * time.Millisecond
@@ -111,7 +118,7 @@ func (e *Executor) sendKeepaliveRequest(ctx context.Context, authID string) erro
 	kaCtx := kacontext.WithKeepaliveContext(ctx)
 
 	payload := map[string]any{
-		"model": "gpt-4o-mini",
+		"model": "gpt-5.1-codex-mini",
 		"messages": []map[string]string{
 			{"role": "user", "content": "hi"},
 		},
@@ -129,7 +136,7 @@ func (e *Executor) sendKeepaliveRequest(ctx context.Context, authID string) erro
 	}
 
 	req := cliproxyexecutor.Request{
-		Model:   "gpt-4o-mini",
+		Model:   "gpt-5.1-codex-mini",
 		Payload: payloadBytes,
 	}
 
@@ -143,5 +150,15 @@ func (e *Executor) sendKeepaliveRequest(ctx context.Context, authID string) erro
 	}
 
 	_, err = e.manager.Execute(kaCtx, []string{provider}, req, opts)
+	return err
+}
+
+// recordKeepaliveSentAt updates the last_keepalive_sent_at timestamp for the given auth.
+func (e *Executor) recordKeepaliveSentAt(authID string, sentAt time.Time) error {
+	_, err := e.db.Exec(`
+		UPDATE account_states
+		SET last_keepalive_sent_at = ?
+		WHERE auth_id = ?
+	`, sentAt.UTC().Format(time.RFC3339), authID)
 	return err
 }

@@ -9,18 +9,19 @@ import (
 
 // AccountStateRow mirrors the account_states table.
 type AccountStateRow struct {
-	AuthIndex       string
-	AuthID          string
-	Email           string
-	Name            string
-	Label           string
-	Unavailable     bool
-	Disabled        bool
-	NextRetryAfter  *time.Time // nil = no restriction
-	QuotaBackoffLvl int
-	Status          string
-	StatusMessage   string
-	UpdatedAt       time.Time
+	AuthIndex            string
+	AuthID               string
+	Email                string
+	Name                 string
+	Label                string
+	Unavailable          bool
+	Disabled             bool
+	NextRetryAfter       *time.Time // nil = no restriction
+	QuotaBackoffLvl      int
+	Status               string
+	StatusMessage        string
+	UpdatedAt            time.Time
+	LastKeepaliveSentAt  *time.Time // nil = never sent
 }
 
 // UpsertAccountStates writes the given auth entries, applying the CASE logic for
@@ -108,7 +109,7 @@ func LoadAccountStates(db *sql.DB) (map[string]*AccountStateRow, error) {
 		SELECT auth_index, auth_id, COALESCE(email,''), COALESCE(name,''), COALESCE(label,''),
 		       unavailable, disabled, next_retry_after,
 		       quota_backoff_lvl, COALESCE(status,'unknown'), COALESCE(status_message,''),
-		       updated_at
+		       updated_at, last_keepalive_sent_at
 		FROM account_states`)
 	if err != nil {
 		return nil, err
@@ -120,17 +121,23 @@ func LoadAccountStates(db *sql.DB) (map[string]*AccountStateRow, error) {
 		r := &AccountStateRow{}
 		var nra sql.NullString
 		var updStr string
+		var lksa sql.NullString
 		if err := rows.Scan(
 			&r.AuthIndex, &r.AuthID, &r.Email, &r.Name, &r.Label,
 			&r.Unavailable, &r.Disabled, &nra,
 			&r.QuotaBackoffLvl, &r.Status, &r.StatusMessage,
-			&updStr,
+			&updStr, &lksa,
 		); err != nil {
 			return nil, err
 		}
 		if nra.Valid && nra.String != "" {
 			if t, err := time.Parse(time.RFC3339, nra.String); err == nil {
 				r.NextRetryAfter = &t
+			}
+		}
+		if lksa.Valid && lksa.String != "" {
+			if t, err := time.Parse(time.RFC3339, lksa.String); err == nil {
+				r.LastKeepaliveSentAt = &t
 			}
 		}
 		r.UpdatedAt, _ = time.Parse(time.RFC3339, updStr)
@@ -160,4 +167,14 @@ func GetTargetsForKeepalive(db *sql.DB) ([]string, error) {
 		result = append(result, idx)
 	}
 	return result, nil
+}
+
+// UpdateLastKeepaliveSentAt records the keepalive send time for the given auth_id.
+func UpdateLastKeepaliveSentAt(db *sql.DB, authID string, sentAt time.Time) error {
+	_, err := db.Exec(`
+		UPDATE account_states
+		SET last_keepalive_sent_at = ?
+		WHERE auth_id = ?
+	`, sentAt.UTC().Format(time.RFC3339), authID)
+	return err
 }

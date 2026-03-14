@@ -55,18 +55,19 @@ CREATE INDEX IF NOT EXISTS idx_ur_timestamp  ON usage_records(timestamp);
 CREATE INDEX IF NOT EXISTS idx_ur_auth_index ON usage_records(auth_index);
 
 CREATE TABLE IF NOT EXISTS account_states (
-    auth_index        TEXT PRIMARY KEY,
-    auth_id           TEXT NOT NULL,
-    email             TEXT,
-    name              TEXT,
-    label             TEXT,
-    unavailable       INTEGER DEFAULT 0,
-    disabled          INTEGER DEFAULT 0,
-    next_retry_after  TEXT,
-    quota_backoff_lvl INTEGER DEFAULT 0,
-    status            TEXT DEFAULT 'unknown',
-    status_message    TEXT,
-    updated_at        TEXT NOT NULL
+    auth_index              TEXT PRIMARY KEY,
+    auth_id                 TEXT NOT NULL,
+    email                   TEXT,
+    name                    TEXT,
+    label                   TEXT,
+    unavailable             INTEGER DEFAULT 0,
+    disabled                INTEGER DEFAULT 0,
+    next_retry_after        TEXT,
+    quota_backoff_lvl       INTEGER DEFAULT 0,
+    status                  TEXT DEFAULT 'unknown',
+    status_message          TEXT,
+    updated_at              TEXT NOT NULL,
+    last_keepalive_sent_at  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -77,5 +78,18 @@ CREATE TABLE IF NOT EXISTS settings (
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("persistence: init schema: %w", err)
 	}
+
+	// Migration: add last_keepalive_sent_at column if it doesn't exist
+	var colExists bool
+	err := db.QueryRow(`
+		SELECT COUNT(*) > 0 FROM pragma_table_info('account_states')
+		WHERE name = 'last_keepalive_sent_at'
+	`).Scan(&colExists)
+	if err == nil && !colExists {
+		if _, err := db.Exec(`ALTER TABLE account_states ADD COLUMN last_keepalive_sent_at TEXT`); err != nil {
+			return fmt.Errorf("persistence: add last_keepalive_sent_at column: %w", err)
+		}
+	}
+
 	return nil
 }

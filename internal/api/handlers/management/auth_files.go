@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -395,6 +396,18 @@ func (h *Handler) buildAuthFileEntry(auth *coreauth.Auth) gin.H {
 	}
 	if !auth.NextRetryAfter.IsZero() {
 		entry["next_retry_after"] = auth.NextRetryAfter
+	}
+	// Query last_keepalive_sent_at from database
+	if h.persistenceDB != nil {
+		var lksa sql.NullString
+		err := h.persistenceDB.QueryRow(`
+			SELECT last_keepalive_sent_at FROM account_states WHERE auth_id = ?
+		`, auth.ID).Scan(&lksa)
+		if err == nil && lksa.Valid && lksa.String != "" {
+			if t, err := time.Parse(time.RFC3339, lksa.String); err == nil {
+				entry["last_keepalive_sent_at"] = t
+			}
+		}
 	}
 	if path != "" {
 		entry["path"] = path
