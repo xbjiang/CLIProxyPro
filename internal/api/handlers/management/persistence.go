@@ -125,6 +125,28 @@ func (h *Handler) GetUsagePerAccountCycles(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"accounts": rows})
 }
 
+// GetAccountCycleHistory returns multi-cycle usage history per account.
+// GET /v0/management/usage/account-cycle-history?max_cycles=10
+func (h *Handler) GetAccountCycleHistory(c *gin.Context) {
+	db := h.getPersistenceDB()
+	if db == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "persistence not available"})
+		return
+	}
+	maxCycles := 10
+	if v := c.Query("max_cycles"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 52 {
+			maxCycles = n
+		}
+	}
+	rows, err := persistence.QueryAccountCycleHistory(c.Request.Context(), db, maxCycles)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"accounts": rows})
+}
+
 // getPersistenceDB returns the db field (nil-safe).
 func (h *Handler) getPersistenceDB() *sql.DB {
 	h.mu.Lock()

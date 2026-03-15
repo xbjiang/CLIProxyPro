@@ -289,6 +289,116 @@ func QueryPerAccountCycles(ctx context.Context, db *sql.DB) ([]AccountCycleStat,
 	return result, nil
 }
 
+// CycleHistoryItem represents one cycle's aggregated usage for an account.
+type CycleHistoryItem struct {
+	CycleNum        int    `json:"cycle_num"` // 0=current, 1=previous, ...
+	CycleStart      string `json:"cycle_start"`
+	CycleEnd        string `json:"cycle_end"`
+	SuccessRequests int64  `json:"success_requests"`
+	FailedRequests  int64  `json:"failed_requests"`
+	TotalTokens     int64  `json:"total_tokens"`
+}
+
+// AccountCycleHistory represents an account with its multi-cycle usage history.
+type AccountCycleHistory struct {
+	AuthIndex string             `json:"auth_index"`
+	Email     string             `json:"email"`
+	CycleEnd  string             `json:"cycle_end"`
+	Cycles    []CycleHistoryItem `json:"cycles"`
+}
+
+// QueryAccountCycleHistory returns multi-cycle usage history per account.
+// Each account's cycle_end is derived from next_retry_after or rl_reset_requests,
+// and each 7-day period before that is a historical cycle.
+func QueryAccountCycleHistory(ctx context.Context, db *sql.DB, maxCycles int) ([]AccountCycleHistory, error) {
+	if maxCycles <= 0 {
+		maxCycles = 10
+	}
+	rows, err := db.QueryContext(ctx, `
+		SELECT
+			a.auth_index,
+			COALESCE(a.email, a.name) as email,
+			COALESCE(a.next_retry_after, a.rl_reset_requests) as cycle_end,
+			CAST((julianday(COALESCE(a.next_retry_after, a.rl_reset_requests)) - julianday(u.timestamp)) / 7 AS INTEGER) as cycle_num,
+			SUM(CASE WHEN u.failed=0 THEN 1 ELSE 0 END) as success_requests,
+			SUM(CASE WHEN u.failed=1 THEN 1 ELSE 0 END) as failed_requests,
+			SUM(CASE WHEN u.failed=0 THEN u.total_tokens ELSE 0 END) as total_tokens
+		FROM account_states a
+		INNER JOIN usage_records u
+			ON u.auth_index = a.auth_index AND u.is_keepalive = 0
+		WHERE COALESCE(a.next_retry_after, a.rl_reset_requests) IS NOT NULL
+		  AND julianday(u.timestamp) >= julianday(COALESCE(a.next_retry_after, a.rl_reset_requests)) - 7 * ?
+		  AND julianday(u.timestamp) < julianday(COALESCE(a.next_retry_after, a.rl_reset_requests))
+		GROUP BY a.auth_index, cycle_num
+		ORDER BY a.auth_index, cycle_num ASC`,
+		maxCycles,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// Group flat rows by auth_index
+	type flatRow struct {
+		authIndex       string
+		email           string
+		cycleEnd        string
+		cycleNum        int
+		successRequests int64
+		failedRequests  int64
+		totalTokens     int64
+	}
+	var flat []flatRow
+	for rows.Next() {
+		var r flatRow
+		if err := rows.Scan(&r.authIndex, &r.email, &r.cycleEnd, &r.cycleNum,
+			&r.successRequests, &r.failedRequests, &r.totalTokens); err != nil {
+			return nil, err
+		}
+		flat = append(flat, r)
+	}
+
+	// Assemble into AccountCycleHistory
+	indexMap := make(map[string]*AccountCycleHistory)
+	var order []string
+	for _, r := range flat {
+		h, ok := indexMap[r.authIndex]
+		if !ok {
+			h = &AccountCycleHistory{
+				AuthIndex: r.authIndex,
+				Email:     r.email,
+				CycleEnd:  r.cycleEnd,
+			}
+			indexMap[r.authIndex] = h
+			order = append(order, r.authIndex)
+		}
+		// Compute cycle_start and cycle_end for this specific cycle_num
+		// cycle_end for cycle N = account_cycle_end - N*7 days
+		// cycle_start for cycle N = account_cycle_end - (N+1)*7 days
+		ceTime, _ := time.Parse("2006-01-02 15:04:05", r.cycleEnd)
+		if ceTime.IsZero() {
+			ceTime, _ = time.Parse(time.RFC3339, r.cycleEnd)
+		}
+		cEnd := ceTime.AddDate(0, 0, -7*r.cycleNum).UTC().Format(time.RFC3339)
+		cStart := ceTime.AddDate(0, 0, -7*(r.cycleNum+1)).UTC().Format(time.RFC3339)
+
+		h.Cycles = append(h.Cycles, CycleHistoryItem{
+			CycleNum:        r.cycleNum,
+			CycleStart:      cStart,
+			CycleEnd:        cEnd,
+			SuccessRequests: r.successRequests,
+			FailedRequests:  r.failedRequests,
+			TotalTokens:     r.totalTokens,
+		})
+	}
+
+	var result []AccountCycleHistory
+	for _, key := range order {
+		result = append(result, *indexMap[key])
+	}
+	return result, nil
+}
+
 // QueryByDateRange returns aggregated stats and detailed logs for a date range.
 func QueryByDateRange(ctx context.Context, db *sql.DB, startDate, endDate string) (*AggregatedStats, []UsageRecord, error) {
 	stats := &AggregatedStats{}
