@@ -409,6 +409,17 @@ func (h *Handler) buildAuthFileEntry(auth *coreauth.Auth) gin.H {
 			}
 		}
 	}
+	if auth.RateLimit != nil {
+		entry["rate_limit"] = gin.H{
+			"limit_requests":     auth.RateLimit.LimitRequests,
+			"remaining_requests": auth.RateLimit.RemainingRequests,
+			"reset_requests":     auth.RateLimit.ResetRequests,
+			"limit_tokens":       auth.RateLimit.LimitTokens,
+			"remaining_tokens":   auth.RateLimit.RemainingTokens,
+			"reset_tokens":       auth.RateLimit.ResetTokens,
+			"updated_at":         auth.RateLimit.UpdatedAt,
+		}
+	}
 	if path != "" {
 		entry["path"] = path
 		entry["source"] = "file"

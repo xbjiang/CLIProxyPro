@@ -74,6 +74,8 @@ type Auth struct {
 	Metadata map[string]any `json:"metadata,omitempty"`
 	// Quota captures recent quota information for load balancers.
 	Quota QuotaState `json:"quota"`
+	// RateLimit captures the most recent rate limit headers from the upstream provider.
+	RateLimit *RateLimitInfo `json:"rate_limit,omitempty"`
 	// LastError stores the last failure encountered while executing or refreshing.
 	LastError *Error `json:"last_error,omitempty"`
 	// CreatedAt is the creation timestamp in UTC.
@@ -105,6 +107,17 @@ type QuotaState struct {
 	NextRecoverAt time.Time `json:"next_recover_at"`
 	// BackoffLevel stores the progressive cooldown exponent used for rate limits.
 	BackoffLevel int `json:"backoff_level,omitempty"`
+}
+
+// RateLimitInfo captures the rate limit headers returned by the upstream provider.
+type RateLimitInfo struct {
+	LimitRequests     int       `json:"limit_requests"`
+	RemainingRequests int       `json:"remaining_requests"`
+	ResetRequests     time.Time `json:"reset_requests"`
+	LimitTokens       int       `json:"limit_tokens"`
+	RemainingTokens   int       `json:"remaining_tokens"`
+	ResetTokens       time.Time `json:"reset_tokens"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // ModelState captures the execution state for a specific model under an auth entry.
@@ -148,6 +161,10 @@ func (a *Auth) Clone() *Auth {
 		for key, state := range a.ModelStates {
 			copyAuth.ModelStates[key] = state.Clone()
 		}
+	}
+	if a.RateLimit != nil {
+		rl := *a.RateLimit
+		copyAuth.RateLimit = &rl
 	}
 	copyAuth.Runtime = a.Runtime
 	return &copyAuth

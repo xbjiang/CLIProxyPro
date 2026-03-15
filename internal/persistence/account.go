@@ -22,6 +22,7 @@ type AccountStateRow struct {
 	StatusMessage        string
 	UpdatedAt            time.Time
 	LastKeepaliveSentAt  *time.Time // nil = never sent
+	RateLimit            *coreauth.RateLimitInfo
 }
 
 // UpsertAccountStates writes the given auth entries, applying the CASE logic for
@@ -37,8 +38,10 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 	stmt, err := tx.Prepare(`
 		INSERT INTO account_states
 			(auth_index, auth_id, email, name, label, unavailable, disabled,
-			 next_retry_after, quota_backoff_lvl, status, status_message, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+			 next_retry_after, quota_backoff_lvl, status, status_message, updated_at,
+			 rl_limit_requests, rl_remaining_requests, rl_reset_requests,
+			 rl_limit_tokens, rl_remaining_tokens, rl_reset_tokens, rl_updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(auth_index) DO UPDATE SET
 			auth_id          = excluded.auth_id,
 			email            = excluded.email,
@@ -52,10 +55,17 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 				     AND account_states.next_retry_after > datetime('now') THEN account_states.next_retry_after
 				ELSE NULL
 			END,
-			quota_backoff_lvl = excluded.quota_backoff_lvl,
-			status           = excluded.status,
-			status_message   = excluded.status_message,
-			updated_at       = excluded.updated_at
+			quota_backoff_lvl    = excluded.quota_backoff_lvl,
+			status               = excluded.status,
+			status_message       = excluded.status_message,
+			updated_at           = excluded.updated_at,
+			rl_limit_requests    = excluded.rl_limit_requests,
+			rl_remaining_requests = excluded.rl_remaining_requests,
+			rl_reset_requests    = excluded.rl_reset_requests,
+			rl_limit_tokens      = excluded.rl_limit_tokens,
+			rl_remaining_tokens  = excluded.rl_remaining_tokens,
+			rl_reset_tokens      = excluded.rl_reset_tokens,
+			rl_updated_at        = excluded.rl_updated_at
 	`)
 	if err != nil {
 		return err
@@ -90,12 +100,34 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 		if a.Disabled {
 			dis = 1
 		}
+		var rlLimitReq, rlRemainReq, rlLimitTok, rlRemainTok int
+		var rlResetReq, rlResetTok, rlUpdatedAt *string
+		if a.RateLimit != nil {
+			rlLimitReq = a.RateLimit.LimitRequests
+			rlRemainReq = a.RateLimit.RemainingRequests
+			rlLimitTok = a.RateLimit.LimitTokens
+			rlRemainTok = a.RateLimit.RemainingTokens
+			if !a.RateLimit.ResetRequests.IsZero() {
+				s := a.RateLimit.ResetRequests.UTC().Format(time.RFC3339)
+				rlResetReq = &s
+			}
+			if !a.RateLimit.ResetTokens.IsZero() {
+				s := a.RateLimit.ResetTokens.UTC().Format(time.RFC3339)
+				rlResetTok = &s
+			}
+			if !a.RateLimit.UpdatedAt.IsZero() {
+				s := a.RateLimit.UpdatedAt.UTC().Format(time.RFC3339)
+				rlUpdatedAt = &s
+			}
+		}
 		if _, err := stmt.Exec(
 			idx, a.ID, email, a.Label, a.Label,
 			unav, dis, nra,
 			a.Quota.BackoffLevel,
 			string(a.Status), a.StatusMessage,
 			now,
+			rlLimitReq, rlRemainReq, rlResetReq,
+			rlLimitTok, rlRemainTok, rlResetTok, rlUpdatedAt,
 		); err != nil {
 			return err
 		}
@@ -109,7 +141,9 @@ func LoadAccountStates(db *sql.DB) (map[string]*AccountStateRow, error) {
 		SELECT auth_index, auth_id, COALESCE(email,''), COALESCE(name,''), COALESCE(label,''),
 		       unavailable, disabled, next_retry_after,
 		       quota_backoff_lvl, COALESCE(status,'unknown'), COALESCE(status_message,''),
-		       updated_at, last_keepalive_sent_at
+		       updated_at, last_keepalive_sent_at,
+		       COALESCE(rl_limit_requests,0), COALESCE(rl_remaining_requests,0), rl_reset_requests,
+		       COALESCE(rl_limit_tokens,0), COALESCE(rl_remaining_tokens,0), rl_reset_tokens, rl_updated_at
 		FROM account_states`)
 	if err != nil {
 		return nil, err
@@ -122,11 +156,15 @@ func LoadAccountStates(db *sql.DB) (map[string]*AccountStateRow, error) {
 		var nra sql.NullString
 		var updStr string
 		var lksa sql.NullString
+		var rlLimitReq, rlRemainReq, rlLimitTok, rlRemainTok int
+		var rlResetReq, rlResetTok, rlUpdatedAt sql.NullString
 		if err := rows.Scan(
 			&r.AuthIndex, &r.AuthID, &r.Email, &r.Name, &r.Label,
 			&r.Unavailable, &r.Disabled, &nra,
 			&r.QuotaBackoffLvl, &r.Status, &r.StatusMessage,
 			&updStr, &lksa,
+			&rlLimitReq, &rlRemainReq, &rlResetReq,
+			&rlLimitTok, &rlRemainTok, &rlResetTok, &rlUpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -141,6 +179,32 @@ func LoadAccountStates(db *sql.DB) (map[string]*AccountStateRow, error) {
 			}
 		}
 		r.UpdatedAt, _ = time.Parse(time.RFC3339, updStr)
+		// Reconstruct RateLimitInfo if any value is non-zero/non-empty
+		if rlLimitReq > 0 || rlRemainReq > 0 || rlLimitTok > 0 || rlRemainTok > 0 ||
+			rlResetReq.Valid || rlResetTok.Valid || rlUpdatedAt.Valid {
+			rl := &coreauth.RateLimitInfo{
+				LimitRequests:     rlLimitReq,
+				RemainingRequests: rlRemainReq,
+				LimitTokens:       rlLimitTok,
+				RemainingTokens:   rlRemainTok,
+			}
+			if rlResetReq.Valid && rlResetReq.String != "" {
+				if t, err := time.Parse(time.RFC3339, rlResetReq.String); err == nil {
+					rl.ResetRequests = t
+				}
+			}
+			if rlResetTok.Valid && rlResetTok.String != "" {
+				if t, err := time.Parse(time.RFC3339, rlResetTok.String); err == nil {
+					rl.ResetTokens = t
+				}
+			}
+			if rlUpdatedAt.Valid && rlUpdatedAt.String != "" {
+				if t, err := time.Parse(time.RFC3339, rlUpdatedAt.String); err == nil {
+					rl.UpdatedAt = t
+				}
+			}
+			r.RateLimit = rl
+		}
 		result[r.AuthIndex] = r
 	}
 	return result, nil

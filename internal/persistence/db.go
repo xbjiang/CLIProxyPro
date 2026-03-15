@@ -91,5 +91,30 @@ CREATE TABLE IF NOT EXISTS settings (
 		}
 	}
 
+	// Migration: add rate limit columns to account_states
+	rlColumns := []struct {
+		name string
+		ddl  string
+	}{
+		{"rl_limit_requests", "ALTER TABLE account_states ADD COLUMN rl_limit_requests INTEGER DEFAULT 0"},
+		{"rl_remaining_requests", "ALTER TABLE account_states ADD COLUMN rl_remaining_requests INTEGER DEFAULT 0"},
+		{"rl_reset_requests", "ALTER TABLE account_states ADD COLUMN rl_reset_requests TEXT"},
+		{"rl_limit_tokens", "ALTER TABLE account_states ADD COLUMN rl_limit_tokens INTEGER DEFAULT 0"},
+		{"rl_remaining_tokens", "ALTER TABLE account_states ADD COLUMN rl_remaining_tokens INTEGER DEFAULT 0"},
+		{"rl_reset_tokens", "ALTER TABLE account_states ADD COLUMN rl_reset_tokens TEXT"},
+		{"rl_updated_at", "ALTER TABLE account_states ADD COLUMN rl_updated_at TEXT"},
+	}
+	for _, col := range rlColumns {
+		var exists bool
+		if qErr := db.QueryRow(`
+			SELECT COUNT(*) > 0 FROM pragma_table_info('account_states')
+			WHERE name = ?
+		`, col.name).Scan(&exists); qErr == nil && !exists {
+			if _, aErr := db.Exec(col.ddl); aErr != nil {
+				return fmt.Errorf("persistence: add %s column: %w", col.name, aErr)
+			}
+		}
+	}
+
 	return nil
 }

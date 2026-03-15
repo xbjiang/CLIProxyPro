@@ -162,30 +162,44 @@ func restoreAccountStates(db *sql.DB, mgr *coreauth.Manager) {
 	}
 	now := time.Now()
 	restored := 0
+	rlRestored := 0
 	for _, state := range states {
-		if state.NextRetryAfter == nil || state.NextRetryAfter.Before(now) {
-			continue // already expired or not set
-		}
 		auth, ok := mgr.GetByID(state.AuthID)
 		if !ok || auth == nil {
 			continue
 		}
-		if !auth.NextRetryAfter.IsZero() {
-			continue // live value already present, don't overwrite
-		}
-		// Inject the persisted retry time
+
+		needUpdate := false
 		authCopy := auth.Clone()
-		authCopy.NextRetryAfter = *state.NextRetryAfter
-		authCopy.Unavailable = true
+
+		// Restore next_retry_after if persisted value is still in the future
+		if state.NextRetryAfter != nil && state.NextRetryAfter.After(now) && auth.NextRetryAfter.IsZero() {
+			authCopy.NextRetryAfter = *state.NextRetryAfter
+			authCopy.Unavailable = true
+			needUpdate = true
+			restored++
+		}
+
+		// Restore rate limit info
+		if state.RateLimit != nil && auth.RateLimit == nil {
+			authCopy.RateLimit = state.RateLimit
+			needUpdate = true
+			rlRestored++
+		}
+
+		if !needUpdate {
+			continue
+		}
 		ctx := coreauth.WithSkipPersist(context.Background())
 		if _, updateErr := mgr.Update(ctx, authCopy); updateErr != nil {
 			log.Debugf("persistence: restore auth %s: %v", state.AuthID, updateErr)
-		} else {
-			restored++
 		}
 	}
 	if restored > 0 {
 		log.Infof("persistence: restored next_retry_after for %d accounts", restored)
+	}
+	if rlRestored > 0 {
+		log.Infof("persistence: restored rate_limit for %d accounts", rlRestored)
 	}
 }
 
