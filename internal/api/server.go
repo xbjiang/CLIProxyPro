@@ -599,6 +599,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/usage/daily", s.mgmt.GetUsageDaily)
 		mgmt.GET("/usage/range", s.mgmt.GetUsageByDateRange)
 		mgmt.GET("/keepalive/status", s.mgmt.GetKeepaliveStatus)
+		mgmt.GET("/usage/per-account-cycles", s.mgmt.GetUsagePerAccountCycles)
 
 		mgmt.GET("/claude-api-key", s.mgmt.GetClaudeKeys)
 		mgmt.PUT("/claude-api-key", s.mgmt.PutClaudeKeys)

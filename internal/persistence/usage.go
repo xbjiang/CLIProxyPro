@@ -233,6 +233,62 @@ type UsageRecord struct {
 	TotalTokens     int64  `json:"total_tokens"`
 }
 
+// AccountCycleStat represents per-account usage within its current quota cycle.
+type AccountCycleStat struct {
+	AuthIndex       string `json:"auth_index"`
+	Email           string `json:"email"`
+	CycleStart      string `json:"cycle_start"`
+	CycleEnd        string `json:"cycle_end"`
+	SuccessRequests int64  `json:"success_requests"`
+	FailedRequests  int64  `json:"failed_requests"`
+	TotalTokens     int64  `json:"total_tokens"`
+	InputTokens     int64  `json:"input_tokens"`
+	OutputTokens    int64  `json:"output_tokens"`
+	ReasoningTokens int64  `json:"reasoning_tokens"`
+}
+
+// QueryPerAccountCycles returns usage stats per account within each account's current quota cycle.
+// Cycle end = COALESCE(next_retry_after, rl_reset_requests), cycle start = cycle_end - 7 days.
+func QueryPerAccountCycles(ctx context.Context, db *sql.DB) ([]AccountCycleStat, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT
+			a.auth_index,
+			COALESCE(a.email, a.name) as email,
+			datetime(COALESCE(a.next_retry_after, a.rl_reset_requests), '-7 days') as cycle_start,
+			COALESCE(a.next_retry_after, a.rl_reset_requests) as cycle_end,
+			COALESCE(SUM(CASE WHEN u.failed=0 THEN 1 ELSE 0 END), 0) as success_requests,
+			COALESCE(SUM(CASE WHEN u.failed=1 THEN 1 ELSE 0 END), 0) as failed_requests,
+			COALESCE(SUM(CASE WHEN u.failed=0 THEN u.total_tokens ELSE 0 END), 0) as total_tokens,
+			COALESCE(SUM(CASE WHEN u.failed=0 THEN u.input_tokens ELSE 0 END), 0) as input_tokens,
+			COALESCE(SUM(CASE WHEN u.failed=0 THEN u.output_tokens ELSE 0 END), 0) as output_tokens,
+			COALESCE(SUM(CASE WHEN u.failed=0 THEN u.reasoning_tokens ELSE 0 END), 0) as reasoning_tokens
+		FROM account_states a
+		LEFT JOIN usage_records u
+			ON u.auth_index = a.auth_index
+			AND u.is_keepalive = 0
+			AND u.timestamp >= datetime(COALESCE(a.next_retry_after, a.rl_reset_requests), '-7 days')
+			AND u.timestamp < COALESCE(a.next_retry_after, a.rl_reset_requests)
+		WHERE COALESCE(a.next_retry_after, a.rl_reset_requests) IS NOT NULL
+		GROUP BY a.auth_index
+		ORDER BY total_tokens DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []AccountCycleStat
+	for rows.Next() {
+		var s AccountCycleStat
+		if err := rows.Scan(&s.AuthIndex, &s.Email, &s.CycleStart, &s.CycleEnd,
+			&s.SuccessRequests, &s.FailedRequests, &s.TotalTokens,
+			&s.InputTokens, &s.OutputTokens, &s.ReasoningTokens); err != nil {
+			return nil, err
+		}
+		result = append(result, s)
+	}
+	return result, nil
+}
+
 // QueryByDateRange returns aggregated stats and detailed logs for a date range.
 func QueryByDateRange(ctx context.Context, db *sql.DB, startDate, endDate string) (*AggregatedStats, []UsageRecord, error) {
 	stats := &AggregatedStats{}

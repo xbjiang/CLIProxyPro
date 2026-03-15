@@ -109,6 +109,22 @@ func (h *Handler) GetUsageByDateRange(c *gin.Context) {
 	})
 }
 
+// GetUsagePerAccountCycles returns per-account usage within each account's current quota cycle.
+// GET /v0/management/usage/per-account-cycles
+func (h *Handler) GetUsagePerAccountCycles(c *gin.Context) {
+	db := h.getPersistenceDB()
+	if db == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "persistence not available"})
+		return
+	}
+	rows, err := persistence.QueryPerAccountCycles(c.Request.Context(), db)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"accounts": rows})
+}
+
 // getPersistenceDB returns the db field (nil-safe).
 func (h *Handler) getPersistenceDB() *sql.DB {
 	h.mu.Lock()
