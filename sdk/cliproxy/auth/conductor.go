@@ -1667,6 +1667,24 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 					suspendReason = "quota"
 					shouldSuspendModel = true
 					setModelQuota = true
+					// Account-level usage limit applies to all models, not just the current one.
+					if result.Error != nil && strings.Contains(result.Error.Message, "usage_limit_reached") {
+						for _, ms := range auth.ModelStates {
+							if ms == nil {
+								continue
+							}
+							ms.Unavailable = true
+							ms.Status = StatusError
+							ms.NextRetryAfter = next
+							ms.UpdatedAt = now
+							ms.Quota = QuotaState{
+								Exceeded:      true,
+								Reason:        "quota",
+								NextRecoverAt: next,
+								BackoffLevel:  backoffLevel,
+							}
+						}
+					}
 				case 408, 500, 502, 503, 504:
 					if quotaCooldownDisabledForAuth(auth) {
 						state.NextRetryAfter = time.Time{}
