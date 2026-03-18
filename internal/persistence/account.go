@@ -59,13 +59,34 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 			status               = excluded.status,
 			status_message       = excluded.status_message,
 			updated_at           = excluded.updated_at,
-			rl_limit_requests    = excluded.rl_limit_requests,
-			rl_remaining_requests = excluded.rl_remaining_requests,
-			rl_reset_requests    = excluded.rl_reset_requests,
-			rl_limit_tokens      = excluded.rl_limit_tokens,
-			rl_remaining_tokens  = excluded.rl_remaining_tokens,
-			rl_reset_tokens      = excluded.rl_reset_tokens,
-			rl_updated_at        = excluded.rl_updated_at
+			rl_limit_requests = CASE
+				WHEN excluded.rl_limit_requests > 0 OR excluded.rl_remaining_requests > 0 THEN excluded.rl_limit_requests
+				ELSE account_states.rl_limit_requests
+			END,
+			rl_remaining_requests = CASE
+				WHEN excluded.rl_limit_requests > 0 OR excluded.rl_remaining_requests > 0 THEN excluded.rl_remaining_requests
+				ELSE account_states.rl_remaining_requests
+			END,
+			rl_reset_requests = CASE
+				WHEN excluded.rl_limit_requests > 0 OR excluded.rl_remaining_requests > 0 THEN excluded.rl_reset_requests
+				ELSE account_states.rl_reset_requests
+			END,
+			rl_limit_tokens = CASE
+				WHEN excluded.rl_limit_tokens > 0 OR excluded.rl_remaining_tokens > 0 THEN excluded.rl_limit_tokens
+				ELSE account_states.rl_limit_tokens
+			END,
+			rl_remaining_tokens = CASE
+				WHEN excluded.rl_limit_tokens > 0 OR excluded.rl_remaining_tokens > 0 THEN excluded.rl_remaining_tokens
+				ELSE account_states.rl_remaining_tokens
+			END,
+			rl_reset_tokens = CASE
+				WHEN excluded.rl_limit_tokens > 0 OR excluded.rl_remaining_tokens > 0 THEN excluded.rl_reset_tokens
+				ELSE account_states.rl_reset_tokens
+			END,
+			rl_updated_at = CASE
+				WHEN excluded.rl_updated_at IS NOT NULL THEN excluded.rl_updated_at
+				ELSE account_states.rl_updated_at
+			END
 	`)
 	if err != nil {
 		return err
