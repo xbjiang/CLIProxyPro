@@ -155,6 +155,68 @@ func (e *Executor) sendKeepaliveRequest(ctx context.Context, authID string) erro
 	return err
 }
 
+// KeepaliveResult holds the result of a single keepalive attempt.
+type KeepaliveResult struct {
+	AuthID  string `json:"auth_id"`
+	Email   string `json:"email,omitempty"`
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+// ExecuteForAuthIDs sends keepalive requests to specific accounts identified by auth_id,
+// with random delays of 3-6 seconds between requests. Returns per-account results.
+func (e *Executor) ExecuteForAuthIDs(ctx context.Context, authIDs []string) []KeepaliveResult {
+	if e.manager == nil {
+		log.Warn("keepalive: manager not set, skipping targeted execution")
+		results := make([]KeepaliveResult, len(authIDs))
+		for i, id := range authIDs {
+			results[i] = KeepaliveResult{AuthID: id, Success: false, Error: "manager not set"}
+		}
+		return results
+	}
+
+	log.Infof("keepalive: targeted execution for %d accounts", len(authIDs))
+	results := make([]KeepaliveResult, 0, len(authIDs))
+	now := time.Now()
+
+	for i, authID := range authIDs {
+		if ctx.Err() != nil {
+			break
+		}
+
+		r := KeepaliveResult{AuthID: authID}
+		// Resolve email for response
+		if a, ok := e.manager.GetByID(authID); ok && a != nil {
+			r.Email = a.Label
+		}
+
+		if err := e.sendKeepaliveRequest(ctx, authID); err != nil {
+			r.Success = false
+			r.Error = err.Error()
+			log.Warnf("keepalive: targeted request for %s failed: %v", authID, err)
+		} else {
+			r.Success = true
+			log.Infof("keepalive: targeted request %d/%d for %s succeeded", i+1, len(authIDs), authID)
+			if e.db != nil {
+				if err := e.recordKeepaliveSentAt(authID, now); err != nil {
+					log.Warnf("keepalive: failed to record sent_at for %s: %v", authID, err)
+				}
+			}
+		}
+		results = append(results, r)
+
+		if i < len(authIDs)-1 {
+			delay := time.Duration(3000+rand.Intn(3001)) * time.Millisecond
+			select {
+			case <-ctx.Done():
+				return results
+			case <-time.After(delay):
+			}
+		}
+	}
+	return results
+}
+
 // recordKeepaliveSentAt updates the last_keepalive_sent_at timestamp for the given auth.
 func (e *Executor) recordKeepaliveSentAt(authID string, sentAt time.Time) error {
 	_, err := e.db.Exec(`

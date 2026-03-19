@@ -3,6 +3,8 @@ package keepalive
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -171,6 +173,42 @@ func (s *Scheduler) StartWithCompensation(ctx context.Context) {
 	// Also schedule normally for future resets
 	s.Reschedule(ctx)
 	log.Info("keepalive: StartWithCompensation complete")
+}
+
+// TriggerForAuthIDs triggers keepalive for specific accounts (by auth_id).
+// This is a non-blocking call that runs in a goroutine.
+func (s *Scheduler) TriggerForAuthIDs(ctx context.Context, authIDs []string) []KeepaliveResult {
+	return s.executor.ExecuteForAuthIDs(ctx, authIDs)
+}
+
+// ResolveAuthIDsByIndex looks up auth_id values for the given auth_index values from the database.
+func (s *Scheduler) ResolveAuthIDsByIndex(ctx context.Context, authIndexes []string) (map[string]string, error) {
+	if len(authIndexes) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(authIndexes))
+	args := make([]any, len(authIndexes))
+	for i, idx := range authIndexes {
+		placeholders[i] = "?"
+		args[i] = idx
+	}
+	query := fmt.Sprintf(`SELECT auth_index, auth_id FROM account_states WHERE auth_index IN (%s)`,
+		strings.Join(placeholders, ","))
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]string)
+	for rows.Next() {
+		var idx, id string
+		if err := rows.Scan(&idx, &id); err != nil {
+			continue
+		}
+		result[idx] = id
+	}
+	return result, nil
 }
 
 func (s *Scheduler) getLastKeepaliveAt() (time.Time, error) {

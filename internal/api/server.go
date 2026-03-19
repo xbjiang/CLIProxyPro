@@ -599,6 +599,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/usage/daily", s.mgmt.GetUsageDaily)
 		mgmt.GET("/usage/range", s.mgmt.GetUsageByDateRange)
 		mgmt.GET("/keepalive/status", s.mgmt.GetKeepaliveStatus)
+		mgmt.POST("/keepalive/trigger", s.mgmt.TriggerKeepalive)
 		mgmt.GET("/usage/per-account-cycles", s.mgmt.GetUsagePerAccountCycles)
 		mgmt.GET("/usage/account-cycle-history", s.mgmt.GetAccountCycleHistory)
 

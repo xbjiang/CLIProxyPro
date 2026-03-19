@@ -154,6 +154,88 @@ func (h *Handler) getPersistenceDB() *sql.DB {
 	return h.persistenceDB
 }
 
+// TriggerKeepalive manually triggers keepalive for specific accounts.
+// POST /v0/management/keepalive/trigger
+//
+// Request body:
+//
+//	{
+//	  "auth_indexes": ["abc123", "def456"],  // by auth_index (preferred from frontend)
+//	  "auth_ids": ["codex-foo@bar.com-free.json"]  // by auth_id (alternative)
+//	}
+//
+// At least one of auth_indexes or auth_ids must be provided.
+func (h *Handler) TriggerKeepalive(c *gin.Context) {
+	sched := h.getKeepaliveScheduler()
+	if sched == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "keepalive scheduler not available"})
+		return
+	}
+
+	var body struct {
+		AuthIndexes []string `json:"auth_indexes"`
+		AuthIDs     []string `json:"auth_ids"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	if len(body.AuthIndexes) == 0 && len(body.AuthIDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "at least one of auth_indexes or auth_ids must be provided"})
+		return
+	}
+
+	// Resolve auth_indexes to auth_ids
+	authIDs := make([]string, 0, len(body.AuthIDs)+len(body.AuthIndexes))
+	authIDs = append(authIDs, body.AuthIDs...)
+
+	if len(body.AuthIndexes) > 0 {
+		indexMap, err := sched.ResolveAuthIDsByIndex(c.Request.Context(), body.AuthIndexes)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to resolve auth indexes: " + err.Error()})
+			return
+		}
+		notFound := make([]string, 0)
+		for _, idx := range body.AuthIndexes {
+			if id, ok := indexMap[idx]; ok {
+				authIDs = append(authIDs, id)
+			} else {
+				notFound = append(notFound, idx)
+			}
+		}
+		if len(notFound) > 0 && len(authIDs) == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "no matching accounts found", "not_found": notFound})
+			return
+		}
+	}
+
+	// Deduplicate
+	seen := make(map[string]bool)
+	unique := make([]string, 0, len(authIDs))
+	for _, id := range authIDs {
+		if !seen[id] {
+			seen[id] = true
+			unique = append(unique, id)
+		}
+	}
+
+	results := sched.TriggerForAuthIDs(c.Request.Context(), unique)
+
+	successCount := 0
+	for _, r := range results {
+		if r.Success {
+			successCount++
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"triggered": len(unique),
+		"success":   successCount,
+		"results":   results,
+	})
+}
+
 // getKeepaliveScheduler returns the scheduler field (nil-safe).
 func (h *Handler) getKeepaliveScheduler() *keepalive.Scheduler {
 	h.mu.Lock()
