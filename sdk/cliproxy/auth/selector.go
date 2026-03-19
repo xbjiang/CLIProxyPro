@@ -403,7 +403,9 @@ func isAuthBlockedForModel(auth *Auth, model string, now time.Time) (bool, block
 				return false, blockReasonNone, time.Time{}
 			}
 		}
-		return false, blockReasonNone, time.Time{}
+		// Model state not found — fall through to account-level check.
+		// Handles quota exhausted on one model (e.g. gpt-5.3) blocking
+		// requests for a different model (e.g. gpt-5.4) on the same account.
 	}
 	if auth.Unavailable && auth.NextRetryAfter.After(now) {
 		next := auth.NextRetryAfter
