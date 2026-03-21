@@ -233,21 +233,21 @@ func (s *authScheduler) pickMixed(ctx context.Context, providers []string, model
 		if providerState == nil {
 			return nil, "", &Error{Code: "auth_not_found", Message: "no auth available"}
 		}
-		shard := providerState.ensureModelLocked(modelKey, time.Now())
-		predicate := func(entry *scheduledAuth) bool {
-			if entry == nil || entry.auth == nil || entry.auth.ID != pinnedAuthID {
-				return false
-			}
-			if len(tried) == 0 {
-				return true
-			}
-			_, ok := tried[pinnedAuthID]
-			return !ok
+		if _, alreadyTried := tried[pinnedAuthID]; alreadyTried {
+			return nil, "", &Error{Code: "auth_not_found", Message: "no auth available"}
 		}
-		if picked := shard.pickReadyLocked(false, s.strategy, predicate); picked != nil {
-			return picked, providerKey, nil
+		// For pinned auth, bypass model-shard filtering: the caller explicitly
+		// selected this account (e.g. manual keepalive), so skip the
+		// supportedModelSet check and look up the auth directly.
+		meta := providerState.auths[pinnedAuthID]
+		if meta == nil || meta.auth == nil {
+			return nil, "", &Error{Code: "auth_not_found", Message: "pinned auth not found"}
 		}
-		return nil, "", shard.unavailableErrorLocked("mixed", model, predicate)
+		blocked, _, _ := isAuthBlockedForModel(meta.auth, modelKey, time.Now())
+		if blocked {
+			return nil, "", &Error{Code: "auth_unavailable", Message: "pinned auth is unavailable"}
+		}
+		return meta.auth, providerKey, nil
 	}
 
 	predicate := triedPredicate(tried)
