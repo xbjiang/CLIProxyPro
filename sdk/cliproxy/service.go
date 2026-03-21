@@ -319,13 +319,16 @@ func (s *Service) applyCoreAuthAddOrUpdate(ctx context.Context, auth *coreauth.A
 		if len(auth.ModelStates) == 0 && len(existing.ModelStates) > 0 {
 			auth.ModelStates = existing.ModelStates
 		}
-		// Preserve runtime quota state: auth files on disk never carry NextRetryAfter
-		// or Unavailable. Without this, every watcher reload clears the quota cooldown
-		// that was injected from SQLite on startup (or set by a live 429 response).
+		// Preserve runtime quota state: auth files on disk never carry NextRetryAfter,
+		// Unavailable, or RateLimit. Without this, every watcher reload clears the
+		// in-memory state injected from SQLite on startup (or from live API responses).
 		if auth.NextRetryAfter.IsZero() && !existing.NextRetryAfter.IsZero() {
 			auth.NextRetryAfter = existing.NextRetryAfter
 			auth.Unavailable = existing.Unavailable
 			auth.Quota = existing.Quota
+		}
+		if auth.RateLimit == nil && existing.RateLimit != nil {
+			auth.RateLimit = existing.RateLimit
 		}
 		op = "update"
 		_, err = s.coreManager.Update(ctx, auth)
