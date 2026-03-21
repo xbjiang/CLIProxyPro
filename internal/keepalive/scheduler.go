@@ -145,12 +145,15 @@ func (s *Scheduler) fire(ctx context.Context) {
 func (s *Scheduler) StartWithCompensation(ctx context.Context) {
 	log.Info("keepalive: StartWithCompensation begin")
 
-	// Simple query: just check if there are any expired accounts
+	// Count accounts that reset while the service was down and haven't been
+	// keepalived since the reset (last_keepalive_sent_at < next_retry_after or NULL).
 	var count int
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM account_states
 		WHERE next_retry_after IS NOT NULL
 		  AND datetime(next_retry_after) <= datetime('now')
+		  AND (last_keepalive_sent_at IS NULL
+		       OR datetime(last_keepalive_sent_at) < datetime(next_retry_after))
 	`).Scan(&count)
 
 	if err != nil {

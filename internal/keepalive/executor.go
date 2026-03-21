@@ -83,13 +83,16 @@ func (e *Executor) Execute(ctx context.Context) int {
 }
 
 // getTargetAccounts returns auth IDs for accounts whose quota window has reset
-// (next_retry_after <= now). We don't check unavailable flag because it may be
-// out of sync - next_retry_after is the authoritative signal for quota reset.
+// (next_retry_after <= now) and haven't been keepalived since the reset.
+// We check last_keepalive_sent_at < next_retry_after to avoid re-firing for
+// accounts already keepalived in a previous service run.
 func (e *Executor) getTargetAccounts(ctx context.Context) ([]string, error) {
 	rows, err := e.db.QueryContext(ctx, `
 		SELECT auth_id FROM account_states
 		WHERE next_retry_after IS NOT NULL
 		  AND datetime(next_retry_after) <= datetime('now')
+		  AND (last_keepalive_sent_at IS NULL
+		       OR datetime(last_keepalive_sent_at) < datetime(next_retry_after))
 	`)
 	if err != nil {
 		return nil, err
