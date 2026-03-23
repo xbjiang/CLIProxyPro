@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/kacontext"
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	log "github.com/sirupsen/logrus"
 )
@@ -228,4 +228,55 @@ func (e *Executor) recordKeepaliveSentAt(authID string, sentAt time.Time) error 
 		WHERE auth_id = ?
 	`, sentAt.UTC().Format(time.RFC3339), authID)
 	return err
+}
+
+// ExecuteForAuthIDsForce is like ExecuteForAuthIDs but bypasses the internal
+// unavailable/blocked check, forcing a real upstream request regardless of the
+// account's current state. Use this to probe whether an account is truly exhausted.
+// If the request succeeds, the account state will be updated naturally via response hooks.
+func (e *Executor) ExecuteForAuthIDsForce(ctx context.Context, authIDs []string) []KeepaliveResult {
+	if e.manager == nil {
+		results := make([]KeepaliveResult, len(authIDs))
+		for i, id := range authIDs {
+			results[i] = KeepaliveResult{AuthID: id, Success: false, Error: "manager not set"}
+		}
+		return results
+	}
+
+	log.Infof("keepalive: force-probe execution for %d accounts", len(authIDs))
+	results := make([]KeepaliveResult, 0, len(authIDs))
+
+	for i, authID := range authIDs {
+		if ctx.Err() != nil {
+			break
+		}
+
+		r := KeepaliveResult{AuthID: authID}
+		if a, ok := e.manager.GetByID(authID); ok && a != nil {
+			r.Email = a.Label
+		}
+
+		// Use both keepalive + force-probe context flags so the scheduler
+		// skips the unavailable check while still marking the request as keepalive.
+		probeCtx := kacontext.WithForceProbeContext(kacontext.WithKeepaliveContext(ctx))
+		if err := e.sendKeepaliveRequest(probeCtx, authID); err != nil {
+			r.Success = false
+			r.Error = err.Error()
+			log.Warnf("keepalive: force-probe for %s failed: %v", authID, err)
+		} else {
+			r.Success = true
+			log.Infof("keepalive: force-probe %d/%d for %s succeeded", i+1, len(authIDs), authID)
+		}
+		results = append(results, r)
+
+		if i < len(authIDs)-1 {
+			delay := time.Duration(3000+rand.Intn(3001)) * time.Millisecond
+			select {
+			case <-ctx.Done():
+				return results
+			case <-time.After(delay):
+			}
+		}
+	}
+	return results
 }

@@ -184,6 +184,12 @@ func (s *Scheduler) TriggerForAuthIDs(ctx context.Context, authIDs []string) []K
 	return s.executor.ExecuteForAuthIDs(ctx, authIDs)
 }
 
+// TriggerForAuthIDsForce is like TriggerForAuthIDs but bypasses the internal
+// unavailable check, sending a real upstream request to verify actual quota status.
+func (s *Scheduler) TriggerForAuthIDsForce(ctx context.Context, authIDs []string) []KeepaliveResult {
+	return s.executor.ExecuteForAuthIDsForce(ctx, authIDs)
+}
+
 // ResolveAuthIDsByIndex looks up auth_id values for the given auth_index values from the database.
 func (s *Scheduler) ResolveAuthIDsByIndex(ctx context.Context, authIndexes []string) (map[string]string, error) {
 	if len(authIndexes) == 0 {

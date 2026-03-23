@@ -2,11 +2,13 @@ package auth
 
 import (
 	"context"
+	"math"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/kacontext"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 )
@@ -244,7 +246,7 @@ func (s *authScheduler) pickMixed(ctx context.Context, providers []string, model
 			return nil, "", &Error{Code: "auth_not_found", Message: "pinned auth not found"}
 		}
 		blocked, _, _ := isAuthBlockedForModel(meta.auth, modelKey, time.Now())
-		if blocked {
+		if blocked && !kacontext.IsForceProbeContext(ctx) {
 			return nil, "", &Error{Code: "auth_unavailable", Message: "pinned auth is unavailable"}
 		}
 		return meta.auth, providerKey, nil
@@ -694,7 +696,7 @@ func (m *modelScheduler) pickReadyAtPriorityLocked(preferWebsocket bool, priorit
 	}
 	var picked *scheduledAuth
 	if strategy == schedulerStrategyFillFirst {
-		picked = view.pickFirst(predicate)
+		picked = view.pickLeastUsed(predicate)
 	} else {
 		picked = view.pickRoundRobin(predicate)
 	}
@@ -849,6 +851,56 @@ func (v *readyView) pickFirst(predicate func(*scheduledAuth) bool) *scheduledAut
 		}
 	}
 	return nil
+}
+
+// pickLeastRemaining returns the ready entry with the least remaining quota (most-used-first).
+// This implements true fill-first: drain accounts closest to exhaustion first, then move on.
+// Accounts without RateLimit data are treated as full quota and selected last,
+// falling back to ID order among themselves. Ties are broken by auth.ID.
+func (v *readyView) pickLeastUsed(predicate func(*scheduledAuth) bool) *scheduledAuth {
+	var best *scheduledAuth
+	bestUsedPct := -math.MaxFloat64
+	bestHasRL := false
+
+	for _, entry := range v.flat {
+		if entry == nil || entry.auth == nil {
+			continue
+		}
+		if predicate != nil && !predicate(entry) {
+			continue
+		}
+
+		rl := entry.auth.RateLimit
+		var usedPct float64
+		hasRL := false
+		if rl != nil {
+			if rl.LimitRequests > 0 {
+				usedPct = 100.0 - float64(rl.RemainingRequests)/float64(rl.LimitRequests)*100.0
+				hasRL = true
+			} else if rl.LimitTokens > 0 {
+				usedPct = 100.0 - float64(rl.RemainingTokens)/float64(rl.LimitTokens)*100.0
+				hasRL = true
+			}
+		}
+
+		if best == nil {
+			best, bestUsedPct, bestHasRL = entry, usedPct, hasRL
+			continue
+		}
+		// Entries with RateLimit always beat entries without
+		if hasRL && !bestHasRL {
+			best, bestUsedPct, bestHasRL = entry, usedPct, hasRL
+			continue
+		}
+		if !hasRL && bestHasRL {
+			continue
+		}
+		// Both same RL status: higher usedPct wins (most used = least remaining first); tie-break by ID
+		if usedPct > bestUsedPct || (usedPct == bestUsedPct && entry.auth.ID < best.auth.ID) {
+			best, bestUsedPct, bestHasRL = entry, usedPct, hasRL
+		}
+	}
+	return best
 }
 
 // pickRoundRobin returns the next ready entry using flat or grouped round-robin traversal.

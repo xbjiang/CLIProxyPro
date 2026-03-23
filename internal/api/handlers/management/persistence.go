@@ -175,6 +175,7 @@ func (h *Handler) TriggerKeepalive(c *gin.Context) {
 	var body struct {
 		AuthIndexes []string `json:"auth_indexes"`
 		AuthIDs     []string `json:"auth_ids"`
+		Force       bool     `json:"force"` // bypass unavailable check to verify actual upstream quota
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
@@ -221,6 +222,9 @@ func (h *Handler) TriggerKeepalive(c *gin.Context) {
 	}
 
 	results := sched.TriggerForAuthIDs(c.Request.Context(), unique)
+	if body.Force {
+		results = sched.TriggerForAuthIDsForce(c.Request.Context(), unique)
+	}
 
 	successCount := 0
 	for _, r := range results {
