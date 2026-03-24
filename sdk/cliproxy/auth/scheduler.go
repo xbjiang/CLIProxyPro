@@ -246,7 +246,7 @@ func (s *authScheduler) pickMixed(ctx context.Context, providers []string, model
 			return nil, "", &Error{Code: "auth_not_found", Message: "pinned auth not found"}
 		}
 		blocked, _, _ := isAuthBlockedForModel(meta.auth, modelKey, time.Now())
-		if blocked && !kacontext.IsForceProbeContext(ctx) {
+		if blocked && !kacontext.IsForceProbeContext(ctx) && !kacontext.IsKeepaliveContext(ctx) {
 			return nil, "", &Error{Code: "auth_unavailable", Message: "pinned auth is unavailable"}
 		}
 		return meta.auth, providerKey, nil
