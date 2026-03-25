@@ -190,6 +190,12 @@ func (s *Scheduler) TriggerForAuthIDsForce(ctx context.Context, authIDs []string
 	return s.executor.ExecuteForAuthIDsForce(ctx, authIDs)
 }
 
+// RecordKeepaliveSentAt records the keepalive sent timestamp for an account immediately,
+// before the actual LLM request completes. Used by async keepalive mode.
+func (s *Scheduler) RecordKeepaliveSentAt(authID string, sentAt time.Time) error {
+	return s.executor.RecordKeepaliveSentAt(authID, sentAt)
+}
+
 // ResolveAuthIDsByIndex looks up auth_id values for the given auth_index values from the database.
 func (s *Scheduler) ResolveAuthIDsByIndex(ctx context.Context, authIndexes []string) (map[string]string, error) {
 	if len(authIndexes) == 0 {

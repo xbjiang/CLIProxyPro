@@ -1,6 +1,7 @@
 package management
 
 import (
+	"context"
 	"database/sql"
 	"net/http"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/keepalive"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/persistence"
+	log "github.com/sirupsen/logrus"
 )
 
 // GetUsageMerged returns aggregated statistics from SQLite.
@@ -176,6 +178,7 @@ func (h *Handler) TriggerKeepalive(c *gin.Context) {
 		AuthIndexes []string `json:"auth_indexes"`
 		AuthIDs     []string `json:"auth_ids"`
 		Force       bool     `json:"force"` // bypass unavailable check to verify actual upstream quota
+		Async       bool     `json:"async"` // return immediately, execute keepalive in background
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
@@ -219,6 +222,29 @@ func (h *Handler) TriggerKeepalive(c *gin.Context) {
 			seen[id] = true
 			unique = append(unique, id)
 		}
+	}
+
+	// Async mode: record sent_at immediately and execute in background.
+	if body.Async {
+		now := time.Now()
+		for _, authID := range unique {
+			if err := sched.RecordKeepaliveSentAt(authID, now); err != nil {
+				log.Warnf("keepalive: failed to pre-record sent_at for async trigger: %v", err)
+			}
+		}
+		go func() {
+			ctx := context.Background()
+			if body.Force {
+				sched.TriggerForAuthIDsForce(ctx, unique)
+			} else {
+				sched.TriggerForAuthIDs(ctx, unique)
+			}
+		}()
+		c.JSON(http.StatusAccepted, gin.H{
+			"accepted":  true,
+			"triggered": len(unique),
+		})
+		return
 	}
 
 	results := sched.TriggerForAuthIDs(c.Request.Context(), unique)

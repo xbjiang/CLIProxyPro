@@ -65,7 +65,7 @@ func (e *Executor) Execute(ctx context.Context) int {
 			log.Infof("keepalive: sent request %d/%d for auth %s", i+1, len(targets), authID)
 			// Record the send time in database
 			if e.db != nil {
-				if err := e.recordKeepaliveSentAt(authID, now); err != nil {
+				if err := e.RecordKeepaliveSentAt(authID, now); err != nil {
 					log.Warnf("keepalive: failed to record sent_at for %s: %v", authID, err)
 				}
 			}
@@ -201,7 +201,7 @@ func (e *Executor) ExecuteForAuthIDs(ctx context.Context, authIDs []string) []Ke
 			r.Success = true
 			log.Infof("keepalive: targeted request %d/%d for %s succeeded", i+1, len(authIDs), authID)
 			if e.db != nil {
-				if err := e.recordKeepaliveSentAt(authID, now); err != nil {
+				if err := e.RecordKeepaliveSentAt(authID, now); err != nil {
 					log.Warnf("keepalive: failed to record sent_at for %s: %v", authID, err)
 				}
 			}
@@ -220,8 +220,8 @@ func (e *Executor) ExecuteForAuthIDs(ctx context.Context, authIDs []string) []Ke
 	return results
 }
 
-// recordKeepaliveSentAt updates the last_keepalive_sent_at timestamp for the given auth.
-func (e *Executor) recordKeepaliveSentAt(authID string, sentAt time.Time) error {
+// RecordKeepaliveSentAt updates the last_keepalive_sent_at timestamp for the given auth.
+func (e *Executor) RecordKeepaliveSentAt(authID string, sentAt time.Time) error {
 	_, err := e.db.Exec(`
 		UPDATE account_states
 		SET last_keepalive_sent_at = ?
