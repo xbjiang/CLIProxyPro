@@ -409,20 +409,35 @@ func (h *Handler) buildAuthFileEntry(auth *coreauth.Auth) gin.H {
 	if !auth.LastRefreshedAt.IsZero() {
 		entry["last_refresh"] = auth.LastRefreshedAt
 	}
-	if !auth.NextRetryAfter.IsZero() {
-		entry["next_retry_after"] = auth.NextRetryAfter
-	}
-	// Query last_keepalive_sent_at from database
+	// Query next_retry_after and last_keepalive_sent_at together by auth_index.
+	// In-memory NextRetryAfter may be cleared after a non-429 error (e.g. EOF) even when
+	// no keepalive has been sent for the current cycle; SQLite retains the anchor value in
+	// that case, so we fall back to it to keep the frontend "missed keepalive" detection working.
 	if h.persistenceDB != nil {
-		var lksa sql.NullString
-		err := h.persistenceDB.QueryRow(`
-			SELECT last_keepalive_sent_at FROM account_states WHERE auth_id = ?
-		`, auth.ID).Scan(&lksa)
-		if err == nil && lksa.Valid && lksa.String != "" {
+		var dbNRA, lksa sql.NullString
+		_ = h.persistenceDB.QueryRow(`
+			SELECT next_retry_after, last_keepalive_sent_at FROM account_states WHERE auth_index = ?
+		`, auth.EnsureIndex()).Scan(&dbNRA, &lksa)
+
+		if !auth.NextRetryAfter.IsZero() {
+			entry["next_retry_after"] = auth.NextRetryAfter
+		} else if dbNRA.Valid && dbNRA.String != "" {
+			if t, err := time.Parse(time.RFC3339, dbNRA.String); err == nil && !t.IsZero() {
+				// Only surface SQLite value when no keepalive has been recorded since the reset
+				noKeepalive := !lksa.Valid || lksa.String == "" || lksa.String < dbNRA.String
+				if noKeepalive {
+					entry["next_retry_after"] = t
+				}
+			}
+		}
+
+		if lksa.Valid && lksa.String != "" {
 			if t, err := time.Parse(time.RFC3339, lksa.String); err == nil {
 				entry["last_keepalive_sent_at"] = t
 			}
 		}
+	} else if !auth.NextRetryAfter.IsZero() {
+		entry["next_retry_after"] = auth.NextRetryAfter
 	}
 	if auth.RateLimit != nil {
 		entry["rate_limit"] = gin.H{

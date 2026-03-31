@@ -53,6 +53,11 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 				WHEN excluded.next_retry_after IS NOT NULL THEN excluded.next_retry_after
 				WHEN account_states.next_retry_after IS NOT NULL
 				     AND account_states.next_retry_after > datetime('now') THEN account_states.next_retry_after
+				-- Preserve past value when no keepalive has been sent since the reset,
+				-- so the frontend can still detect and surface the missed keepalive.
+				WHEN account_states.next_retry_after IS NOT NULL
+				     AND (account_states.last_keepalive_sent_at IS NULL
+				          OR account_states.last_keepalive_sent_at < account_states.next_retry_after) THEN account_states.next_retry_after
 				ELSE NULL
 			END,
 			quota_backoff_lvl    = excluded.quota_backoff_lvl,
