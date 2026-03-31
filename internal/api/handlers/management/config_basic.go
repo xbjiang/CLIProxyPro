@@ -317,6 +317,70 @@ func (h *Handler) PutRoutingStrategy(c *gin.Context) {
 	h.persist(c)
 }
 
+// GetPinnedAccount returns the currently pinned account, or {"pinned":null} if none.
+func (h *Handler) GetPinnedAccount(c *gin.Context) {
+	if h == nil || h.authManager == nil {
+		c.JSON(200, gin.H{"pinned": nil})
+		return
+	}
+	pinnedID := h.authManager.GetGlobalPinnedAuth()
+	if pinnedID == "" {
+		c.JSON(200, gin.H{"pinned": nil})
+		return
+	}
+	for _, a := range h.authManager.List() {
+		if a.ID == pinnedID {
+			c.JSON(200, gin.H{"pinned": gin.H{
+				"auth_id":    a.ID,
+				"auth_index": a.EnsureIndex(),
+				"email":      authEmail(a),
+			}})
+			return
+		}
+	}
+	// Pinned auth no longer exists – clear stale pin.
+	h.authManager.SetGlobalPinnedAuth("")
+	c.JSON(200, gin.H{"pinned": nil})
+}
+
+// PutPinnedAccount pins routing to the specified account (preferred; falls back to fill-first if unavailable).
+func (h *Handler) PutPinnedAccount(c *gin.Context) {
+	if h == nil || h.authManager == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "auth manager not available"})
+		return
+	}
+	var body struct {
+		AuthIndex *string `json:"auth_index"`
+		AuthID    *string `json:"auth_id"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || (body.AuthIndex == nil && body.AuthID == nil) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "auth_index or auth_id required"})
+		return
+	}
+	for _, a := range h.authManager.List() {
+		if (body.AuthID != nil && a.ID == *body.AuthID) ||
+			(body.AuthIndex != nil && a.EnsureIndex() == *body.AuthIndex) {
+			h.authManager.SetGlobalPinnedAuth(a.ID)
+			c.JSON(200, gin.H{
+				"status":     "ok",
+				"auth_id":    a.ID,
+				"auth_index": a.EnsureIndex(),
+				"email":      authEmail(a),
+			})
+			return
+		}
+	}
+	c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+}
+
+// DeletePinnedAccount clears the global account pin and restores normal routing.
+func (h *Handler) DeletePinnedAccount(c *gin.Context) {
+	if h != nil && h.authManager != nil {
+		h.authManager.SetGlobalPinnedAuth("")
+	}
+	c.JSON(200, gin.H{"status": "ok"})
+}
+
 // Proxy URL
 func (h *Handler) GetProxyURL(c *gin.Context) { c.JSON(200, gin.H{"proxy-url": h.cfg.ProxyURL}) }
 func (h *Handler) PutProxyURL(c *gin.Context) {

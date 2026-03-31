@@ -165,6 +165,11 @@ type Manager struct {
 	// Auto refresh state
 	refreshCancel    context.CancelFunc
 	refreshSemaphore chan struct{}
+
+	// globalPinnedAuthID locks all routing to a specific auth when non-empty.
+	// Protected by globalPinnedAuthMu.
+	globalPinnedAuthID string
+	globalPinnedAuthMu sync.RWMutex
 }
 
 // NewManager constructs a manager with optional custom selector and hook.
@@ -249,6 +254,27 @@ func (m *Manager) SetSelector(selector Selector) {
 		m.scheduler.setSelector(selector)
 		m.syncScheduler()
 	}
+}
+
+// SetGlobalPinnedAuth locks all routing to the specified auth ID.
+// Pass an empty string to clear the pin and restore normal routing.
+func (m *Manager) SetGlobalPinnedAuth(authID string) {
+	if m == nil {
+		return
+	}
+	m.globalPinnedAuthMu.Lock()
+	m.globalPinnedAuthID = authID
+	m.globalPinnedAuthMu.Unlock()
+}
+
+// GetGlobalPinnedAuth returns the currently pinned auth ID, or empty string if none.
+func (m *Manager) GetGlobalPinnedAuth() string {
+	if m == nil {
+		return ""
+	}
+	m.globalPinnedAuthMu.RLock()
+	defer m.globalPinnedAuthMu.RUnlock()
+	return m.globalPinnedAuthID
 }
 
 // SetStore swaps the underlying persistence store.
@@ -2075,6 +2101,9 @@ func (m *Manager) useSchedulerFastPath() bool {
 	if m == nil || m.scheduler == nil {
 		return false
 	}
+	if m.GetGlobalPinnedAuth() != "" {
+		return false
+	}
 	return isBuiltInSelector(m.selector)
 }
 
@@ -2095,6 +2124,16 @@ func shouldRetrySchedulerPick(err error) bool {
 
 func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, error) {
 	pinnedAuthID := pinnedAuthIDFromMetadata(opts.Metadata)
+	if pinnedAuthID == "" {
+		// Apply global pin only when the pinned account hasn't been tried yet.
+		// If it was already tried (quota exceeded / error), fall through to
+		// normal fill-first routing so the request can succeed on another account.
+		if globalPin := m.GetGlobalPinnedAuth(); globalPin != "" {
+			if _, alreadyTried := tried[globalPin]; !alreadyTried {
+				pinnedAuthID = globalPin
+			}
+		}
+	}
 
 	m.mu.RLock()
 	executor, okExecutor := m.executors[provider]
@@ -2186,6 +2225,13 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cli
 
 func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, string, error) {
 	pinnedAuthID := pinnedAuthIDFromMetadata(opts.Metadata)
+	if pinnedAuthID == "" {
+		if globalPin := m.GetGlobalPinnedAuth(); globalPin != "" {
+			if _, alreadyTried := tried[globalPin]; !alreadyTried {
+				pinnedAuthID = globalPin
+			}
+		}
+	}
 
 	providerSet := make(map[string]struct{}, len(providers))
 	for _, provider := range providers {
