@@ -74,6 +74,14 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS account_reset_history (
+    auth_index        TEXT NOT NULL,
+    rl_reset_requests TEXT NOT NULL,
+    recorded_at       TEXT NOT NULL,
+    UNIQUE(auth_index, rl_reset_requests)
+);
+CREATE INDEX IF NOT EXISTS idx_arh_auth_index ON account_reset_history(auth_index);
 `
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("persistence: init schema: %w", err)
@@ -115,6 +123,14 @@ CREATE TABLE IF NOT EXISTS settings (
 			}
 		}
 	}
+
+	// Migration: seed account_reset_history from existing account_states
+	_, _ = db.Exec(`
+		INSERT OR IGNORE INTO account_reset_history (auth_index, rl_reset_requests, recorded_at)
+		SELECT auth_index, rl_reset_requests, datetime('now')
+		FROM account_states
+		WHERE rl_reset_requests IS NOT NULL AND rl_reset_requests != ''
+	`)
 
 	return nil
 }

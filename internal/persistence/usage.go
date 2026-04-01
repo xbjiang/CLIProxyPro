@@ -248,52 +248,46 @@ type AccountCycleStat struct {
 }
 
 // QueryPerAccountCycles returns usage stats per account within each account's current quota cycle.
-// Any single known reset time can derive exact cycle boundaries via 7-day modular arithmetic:
-//   - next_retry_after (future): cycle = [next_retry_after-7d, next_retry_after]
-//   - last_keepalive_sent_at (past anchor T): N = floor((now-T)/7d), cycle = [T+N*7d, T+(N+1)*7d]
-//   - No anchor: rolling [now-7d, now]
+// Primary: use account_reset_history to find the previous reset time (precise cycle boundary).
+// Fallback: if no history, use [cycle_end - 7 days, cycle_end) approximation.
 func QueryPerAccountCycles(ctx context.Context, db *sql.DB) ([]AccountCycleStat, error) {
 	rows, err := db.QueryContext(ctx, `
-		WITH cycle_anchors AS (
+		WITH anchors AS MATERIALIZED (
 			SELECT
-				auth_index,
-				COALESCE(email, name) as email,
-				CASE
-					WHEN next_retry_after IS NOT NULL AND next_retry_after > datetime('now')
-					THEN datetime(next_retry_after, '-7 days')
-					WHEN last_keepalive_sent_at IS NOT NULL
-					THEN datetime(last_keepalive_sent_at,
-						'+' || (CAST((julianday('now') - julianday(last_keepalive_sent_at)) / 7 AS INTEGER) * 7) || ' days')
-					ELSE datetime('now', '-7 days')
-				END as cycle_start,
-				CASE
-					WHEN next_retry_after IS NOT NULL AND next_retry_after > datetime('now')
-					THEN next_retry_after
-					WHEN last_keepalive_sent_at IS NOT NULL
-					THEN datetime(last_keepalive_sent_at,
-						'+' || ((CAST((julianday('now') - julianday(last_keepalive_sent_at)) / 7 AS INTEGER) + 1) * 7) || ' days')
-					ELSE datetime('now')
-				END as cycle_end
-			FROM account_states
+				a.auth_index,
+				COALESCE(a.email, a.name) as email,
+				COALESCE(NULLIF(a.rl_reset_requests, ''), strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) as cycle_end,
+				(SELECT h.rl_reset_requests FROM account_reset_history h
+				 WHERE h.auth_index = a.auth_index
+				   AND h.rl_reset_requests < COALESCE(NULLIF(a.rl_reset_requests, ''), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+				 ORDER BY h.rl_reset_requests DESC LIMIT 1
+				) as prev_reset
+			FROM account_states a
+		),
+		current_cycle AS MATERIALIZED (
+			SELECT auth_index, email,
+				COALESCE(prev_reset, strftime('%Y-%m-%dT%H:%M:%fZ', cycle_end, '-7 days')) as cycle_start,
+				cycle_end
+			FROM anchors
 		)
 		SELECT
-			ca.auth_index,
-			ca.email,
-			ca.cycle_start,
-			ca.cycle_end,
+			cc.auth_index,
+			cc.email,
+			cc.cycle_start,
+			cc.cycle_end,
 			COALESCE(SUM(CASE WHEN u.failed=0 THEN 1 ELSE 0 END), 0) as success_requests,
 			COALESCE(SUM(CASE WHEN u.failed=1 THEN 1 ELSE 0 END), 0) as failed_requests,
 			COALESCE(SUM(CASE WHEN u.failed=0 THEN u.total_tokens ELSE 0 END), 0) as total_tokens,
 			COALESCE(SUM(CASE WHEN u.failed=0 THEN u.input_tokens ELSE 0 END), 0) as input_tokens,
 			COALESCE(SUM(CASE WHEN u.failed=0 THEN u.output_tokens ELSE 0 END), 0) as output_tokens,
 			COALESCE(SUM(CASE WHEN u.failed=0 THEN u.reasoning_tokens ELSE 0 END), 0) as reasoning_tokens
-		FROM cycle_anchors ca
+		FROM current_cycle cc
 		LEFT JOIN usage_records u
-			ON u.auth_index = ca.auth_index
+			ON u.auth_index = cc.auth_index
 			AND u.is_keepalive = 0
-			AND julianday(u.timestamp) >= julianday(ca.cycle_start)
-			AND julianday(u.timestamp) < julianday(ca.cycle_end)
-		GROUP BY ca.auth_index
+			AND u.timestamp >= cc.cycle_start
+			AND u.timestamp < cc.cycle_end
+		GROUP BY cc.auth_index
 		ORDER BY total_tokens DESC`)
 	if err != nil {
 		return nil, err
@@ -332,39 +326,45 @@ type AccountCycleHistory struct {
 }
 
 // QueryAccountCycleHistory returns multi-cycle usage history per account.
-// Cycle anchor: next_retry_after when the account is currently rate-limited (future value),
-// otherwise datetime('now'). Each prior 7-day window is a historical cycle.
+// Primary: use account_reset_history for precise cycle boundaries. Each recorded
+// rl_reset_requests is a cycle_end; the previous recorded reset is the cycle_start.
+// Fallback: for the oldest recorded cycle (no previous reset), use cycle_end - 7d.
 func QueryAccountCycleHistory(ctx context.Context, db *sql.DB, maxCycles int) ([]AccountCycleHistory, error) {
 	if maxCycles <= 0 {
 		maxCycles = 10
 	}
 	rows, err := db.QueryContext(ctx, `
-		WITH cycle_anchors AS (
+		WITH resets AS MATERIALIZED (
 			SELECT
-				auth_index,
-				COALESCE(email, name) as email,
-				CASE
-					WHEN next_retry_after IS NOT NULL AND next_retry_after > datetime('now')
-					THEN next_retry_after
-					ELSE datetime('now')
-				END as cycle_end
-			FROM account_states
+				h.auth_index,
+				COALESCE(a.email, a.name) as email,
+				h.rl_reset_requests as cycle_end,
+				LAG(h.rl_reset_requests) OVER (PARTITION BY h.auth_index ORDER BY h.rl_reset_requests) as prev_reset,
+				ROW_NUMBER() OVER (PARTITION BY h.auth_index ORDER BY h.rl_reset_requests DESC) - 1 as cycle_num
+			FROM account_reset_history h
+			JOIN account_states a ON a.auth_index = h.auth_index
+		),
+		cycles AS MATERIALIZED (
+			SELECT
+				r.auth_index, r.email, r.cycle_num,
+				COALESCE(r.prev_reset, strftime('%Y-%m-%dT%H:%M:%fZ', r.cycle_end, '-7 days')) as cycle_start,
+				r.cycle_end
+			FROM resets r
+			WHERE r.cycle_num < ?
 		)
 		SELECT
-			ca.auth_index,
-			ca.email,
-			ca.cycle_end,
-			CAST((julianday(ca.cycle_end) - julianday(u.timestamp)) / 7 AS INTEGER) as cycle_num,
-			SUM(CASE WHEN u.failed=0 THEN 1 ELSE 0 END) as success_requests,
-			SUM(CASE WHEN u.failed=1 THEN 1 ELSE 0 END) as failed_requests,
-			SUM(CASE WHEN u.failed=0 THEN u.total_tokens ELSE 0 END) as total_tokens
-		FROM cycle_anchors ca
-		INNER JOIN usage_records u
-			ON u.auth_index = ca.auth_index AND u.is_keepalive = 0
-		WHERE julianday(u.timestamp) >= julianday(ca.cycle_end) - 7 * ?
-		  AND julianday(u.timestamp) < julianday(ca.cycle_end)
-		GROUP BY ca.auth_index, cycle_num
-		ORDER BY ca.auth_index, cycle_num ASC`,
+			c.auth_index, c.email, c.cycle_num, c.cycle_start, c.cycle_end,
+			COALESCE(SUM(CASE WHEN u.failed=0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN u.failed=1 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN u.failed=0 THEN u.total_tokens ELSE 0 END), 0)
+		FROM cycles c
+		LEFT JOIN usage_records u
+			ON u.auth_index = c.auth_index
+			AND u.is_keepalive = 0
+			AND u.timestamp >= c.cycle_start
+			AND u.timestamp < c.cycle_end
+		GROUP BY c.auth_index, c.cycle_num
+		ORDER BY c.auth_index, c.cycle_num ASC`,
 		maxCycles,
 	)
 	if err != nil {
@@ -372,12 +372,12 @@ func QueryAccountCycleHistory(ctx context.Context, db *sql.DB, maxCycles int) ([
 	}
 	defer rows.Close()
 
-	// Group flat rows by auth_index
 	type flatRow struct {
 		authIndex       string
 		email           string
-		cycleEnd        string
 		cycleNum        int
+		cycleStart      string
+		cycleEnd        string
 		successRequests int64
 		failedRequests  int64
 		totalTokens     int64
@@ -385,14 +385,13 @@ func QueryAccountCycleHistory(ctx context.Context, db *sql.DB, maxCycles int) ([
 	var flat []flatRow
 	for rows.Next() {
 		var r flatRow
-		if err := rows.Scan(&r.authIndex, &r.email, &r.cycleEnd, &r.cycleNum,
+		if err := rows.Scan(&r.authIndex, &r.email, &r.cycleNum, &r.cycleStart, &r.cycleEnd,
 			&r.successRequests, &r.failedRequests, &r.totalTokens); err != nil {
 			return nil, err
 		}
 		flat = append(flat, r)
 	}
 
-	// Assemble into AccountCycleHistory
 	indexMap := make(map[string]*AccountCycleHistory)
 	var order []string
 	for _, r := range flat {
@@ -406,20 +405,10 @@ func QueryAccountCycleHistory(ctx context.Context, db *sql.DB, maxCycles int) ([
 			indexMap[r.authIndex] = h
 			order = append(order, r.authIndex)
 		}
-		// Compute cycle_start and cycle_end for this specific cycle_num
-		// cycle_end for cycle N = account_cycle_end - N*7 days
-		// cycle_start for cycle N = account_cycle_end - (N+1)*7 days
-		ceTime, _ := time.Parse("2006-01-02 15:04:05", r.cycleEnd)
-		if ceTime.IsZero() {
-			ceTime, _ = time.Parse(time.RFC3339, r.cycleEnd)
-		}
-		cEnd := ceTime.AddDate(0, 0, -7*r.cycleNum).UTC().Format(time.RFC3339)
-		cStart := ceTime.AddDate(0, 0, -7*(r.cycleNum+1)).UTC().Format(time.RFC3339)
-
 		h.Cycles = append(h.Cycles, CycleHistoryItem{
 			CycleNum:        r.cycleNum,
-			CycleStart:      cStart,
-			CycleEnd:        cEnd,
+			CycleStart:      r.cycleStart,
+			CycleEnd:        r.cycleEnd,
 			SuccessRequests: r.successRequests,
 			FailedRequests:  r.failedRequests,
 			TotalTokens:     r.totalTokens,

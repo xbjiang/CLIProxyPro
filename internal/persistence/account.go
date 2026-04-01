@@ -35,6 +35,15 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	histStmt, err := tx.Prepare(`
+		INSERT OR IGNORE INTO account_reset_history (auth_index, rl_reset_requests, recorded_at)
+		VALUES (?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer histStmt.Close()
+
 	stmt, err := tx.Prepare(`
 		INSERT INTO account_states
 			(auth_index, auth_id, email, name, label, unavailable, disabled,
@@ -156,6 +165,11 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 			rlLimitTok, rlRemainTok, rlResetTok, rlUpdatedAt,
 		); err != nil {
 			return err
+		}
+		if rlResetReq != nil {
+			if _, err := histStmt.Exec(idx, *rlResetReq, now); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit()
