@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -696,7 +695,7 @@ func (m *modelScheduler) pickReadyAtPriorityLocked(preferWebsocket bool, priorit
 	}
 	var picked *scheduledAuth
 	if strategy == schedulerStrategyFillFirst {
-		picked = view.pickLeastUsed(predicate)
+		picked = view.pickEarliestReset(predicate)
 	} else {
 		picked = view.pickRoundRobin(predicate)
 	}
@@ -853,14 +852,16 @@ func (v *readyView) pickFirst(predicate func(*scheduledAuth) bool) *scheduledAut
 	return nil
 }
 
-// pickLeastRemaining returns the ready entry with the least remaining quota (most-used-first).
-// This implements true fill-first: drain accounts closest to exhaustion first, then move on.
-// Accounts without RateLimit data are treated as full quota and selected last,
-// falling back to ID order among themselves. Ties are broken by auth.ID.
-func (v *readyView) pickLeastUsed(predicate func(*scheduledAuth) bool) *scheduledAuth {
+// pickEarliestReset returns the ready entry whose rate-limit window resets soonest.
+// This implements fill-first by prioritizing accounts that are about to refresh their quota,
+// maximizing utilization before the window rolls over.
+// Accounts with a future ResetRequests/ResetTokens are preferred over those without.
+// Among accounts with reset data, the earliest reset time wins. Ties are broken by auth.ID.
+func (v *readyView) pickEarliestReset(predicate func(*scheduledAuth) bool) *scheduledAuth {
 	var best *scheduledAuth
-	bestUsedPct := -math.MaxFloat64
-	bestHasRL := false
+	var bestResetAt time.Time
+	bestHasReset := false
+	now := time.Now()
 
 	for _, entry := range v.flat {
 		if entry == nil || entry.auth == nil {
@@ -870,37 +871,51 @@ func (v *readyView) pickLeastUsed(predicate func(*scheduledAuth) bool) *schedule
 			continue
 		}
 
-		rl := entry.auth.RateLimit
-		var usedPct float64
-		hasRL := false
-		if rl != nil {
-			if rl.LimitRequests > 0 {
-				usedPct = 100.0 - float64(rl.RemainingRequests)/float64(rl.LimitRequests)*100.0
-				hasRL = true
-			} else if rl.LimitTokens > 0 {
-				usedPct = 100.0 - float64(rl.RemainingTokens)/float64(rl.LimitTokens)*100.0
-				hasRL = true
-			}
-		}
+		resetAt, hasReset := authResetTime(entry.auth, now)
 
 		if best == nil {
-			best, bestUsedPct, bestHasRL = entry, usedPct, hasRL
+			best, bestResetAt, bestHasReset = entry, resetAt, hasReset
 			continue
 		}
-		// Entries with RateLimit always beat entries without
-		if hasRL && !bestHasRL {
-			best, bestUsedPct, bestHasRL = entry, usedPct, hasRL
+		if hasReset && !bestHasReset {
+			best, bestResetAt, bestHasReset = entry, resetAt, hasReset
 			continue
 		}
-		if !hasRL && bestHasRL {
+		if !hasReset && bestHasReset {
 			continue
 		}
-		// Both same RL status: higher usedPct wins (most used = least remaining first); tie-break by ID
-		if usedPct > bestUsedPct || (usedPct == bestUsedPct && entry.auth.ID < best.auth.ID) {
-			best, bestUsedPct, bestHasRL = entry, usedPct, hasRL
+		if hasReset && bestHasReset {
+			if resetAt.Before(bestResetAt) || (resetAt.Equal(bestResetAt) && entry.auth.ID < best.auth.ID) {
+				best, bestResetAt, bestHasReset = entry, resetAt, hasReset
+			}
+			continue
+		}
+		if entry.auth.ID < best.auth.ID {
+			best = entry
 		}
 	}
 	return best
+}
+
+// authResetTime extracts the earliest future reset time from an auth's RateLimit headers.
+func authResetTime(auth *Auth, now time.Time) (time.Time, bool) {
+	rl := auth.RateLimit
+	if rl == nil {
+		return time.Time{}, false
+	}
+	var resetAt time.Time
+	hasReset := false
+	if !rl.ResetRequests.IsZero() && rl.ResetRequests.After(now) {
+		resetAt = rl.ResetRequests
+		hasReset = true
+	}
+	if !rl.ResetTokens.IsZero() && rl.ResetTokens.After(now) {
+		if !hasReset || rl.ResetTokens.Before(resetAt) {
+			resetAt = rl.ResetTokens
+			hasReset = true
+		}
+	}
+	return resetAt, hasReset
 }
 
 // pickRoundRobin returns the next ready entry using flat or grouped round-robin traversal.

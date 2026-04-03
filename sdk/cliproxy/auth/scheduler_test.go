@@ -119,6 +119,37 @@ func TestSchedulerPick_FillFirstSticksToFirstReady(t *testing.T) {
 	}
 }
 
+func TestSchedulerPick_FillFirstPrefersEarliestReset(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	scheduler := newSchedulerForTest(
+		&FillFirstSelector{},
+		&Auth{ID: "late-reset", Provider: "gemini", RateLimit: &RateLimitInfo{
+			LimitRequests: 100, RemainingRequests: 80,
+			ResetRequests: now.Add(4 * time.Hour),
+		}},
+		&Auth{ID: "early-reset", Provider: "gemini", RateLimit: &RateLimitInfo{
+			LimitRequests: 100, RemainingRequests: 20,
+			ResetRequests: now.Add(1 * time.Hour),
+		}},
+		&Auth{ID: "no-ratelimit", Provider: "gemini"},
+	)
+
+	for index := 0; index < 3; index++ {
+		got, errPick := scheduler.pickSingle(context.Background(), "gemini", "", cliproxyexecutor.Options{}, nil)
+		if errPick != nil {
+			t.Fatalf("pickSingle() #%d error = %v", index, errPick)
+		}
+		if got == nil {
+			t.Fatalf("pickSingle() #%d auth = nil", index)
+		}
+		if got.ID != "early-reset" {
+			t.Fatalf("pickSingle() #%d auth.ID = %q, want %q (earliest reset)", index, got.ID, "early-reset")
+		}
+	}
+}
+
 func TestSchedulerPick_PromotesExpiredCooldownBeforePick(t *testing.T) {
 	t.Parallel()
 

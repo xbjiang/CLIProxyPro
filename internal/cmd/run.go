@@ -180,11 +180,15 @@ func restoreAccountStates(db *sql.DB, mgr *coreauth.Manager) {
 			restored++
 		}
 
-		// Restore rate limit info
+		// Restore rate limit info only if the reset time is still in the future
 		if state.RateLimit != nil && auth.RateLimit == nil {
-			authCopy.RateLimit = state.RateLimit
-			needUpdate = true
-			rlRestored++
+			reqFuture := !state.RateLimit.ResetRequests.IsZero() && state.RateLimit.ResetRequests.After(now)
+			tokFuture := !state.RateLimit.ResetTokens.IsZero() && state.RateLimit.ResetTokens.After(now)
+			if reqFuture || tokFuture {
+				authCopy.RateLimit = state.RateLimit
+				needUpdate = true
+				rlRestored++
+			}
 		}
 
 		if !needUpdate {

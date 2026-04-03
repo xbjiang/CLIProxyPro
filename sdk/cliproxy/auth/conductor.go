@@ -1732,6 +1732,13 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 
 		if result.RateLimit != nil {
 			auth.RateLimit = result.RateLimit
+		} else if result.Success && auth.RateLimit != nil {
+			rl := auth.RateLimit
+			reqStale := rl.ResetRequests.IsZero() || !rl.ResetRequests.After(now)
+			tokStale := rl.ResetTokens.IsZero() || !rl.ResetTokens.After(now)
+			if reqStale && tokStale {
+				auth.RateLimit = nil
+			}
 		}
 
 		_ = m.persist(ctx, auth)

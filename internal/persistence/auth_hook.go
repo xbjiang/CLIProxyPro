@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"sync"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/kacontext"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -55,6 +56,13 @@ func (h *PersistenceHook) OnAuthUpdated(ctx context.Context, auth *coreauth.Auth
 // It fetches the latest auth snapshot from the manager (which has already applied
 // MarkResult state) and persists it, then triggers rescheduling.
 func (h *PersistenceHook) OnResult(ctx context.Context, result coreauth.Result) {
+	// For successful keepalive requests, record last_keepalive_sent_at BEFORE
+	// the upsert so the next_retry_after CASE logic can correctly detect that
+	// a keepalive was sent and clear the stale value.
+	if kacontext.IsKeepaliveContext(ctx) && result.Success && h.db != nil {
+		_ = UpdateLastKeepaliveSentAt(h.db, result.AuthID, time.Now())
+	}
+
 	h.managerMu.RLock()
 	mgr := h.manager
 	h.managerMu.RUnlock()

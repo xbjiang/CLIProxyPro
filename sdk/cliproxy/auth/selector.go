@@ -350,7 +350,8 @@ func groupByVirtualParent(auths []*Auth) (map[string][]*Auth, []string) {
 	return groups, parentOrder
 }
 
-// Pick selects the first available auth for the provider in a deterministic manner.
+// Pick selects the available auth whose rate-limit window resets earliest.
+// Accounts with a known future reset time are preferred; ties and unknowns fall back to ID order.
 func (s *FillFirstSelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
 	_ = opts
 	now := time.Now()
@@ -359,6 +360,22 @@ func (s *FillFirstSelector) Pick(ctx context.Context, provider, model string, op
 		return nil, err
 	}
 	available = preferCodexWebsocketAuths(ctx, provider, available)
+	sort.Slice(available, func(i, j int) bool {
+		ri, hi := authResetTime(available[i], now)
+		rj, hj := authResetTime(available[j], now)
+		if hi && !hj {
+			return true
+		}
+		if !hi && hj {
+			return false
+		}
+		if hi && hj {
+			if !ri.Equal(rj) {
+				return ri.Before(rj)
+			}
+		}
+		return available[i].ID < available[j].ID
+	})
 	return available[0], nil
 }
 

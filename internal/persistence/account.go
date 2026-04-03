@@ -61,7 +61,7 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 			next_retry_after = CASE
 				WHEN excluded.next_retry_after IS NOT NULL THEN excluded.next_retry_after
 				WHEN account_states.next_retry_after IS NOT NULL
-				     AND account_states.next_retry_after > datetime('now') THEN account_states.next_retry_after
+				     AND datetime(account_states.next_retry_after) > datetime('now') THEN account_states.next_retry_after
 				-- Preserve past value when no keepalive has been sent since the reset,
 				-- so the frontend can still detect and surface the missed keepalive.
 				WHEN account_states.next_retry_after IS NOT NULL
@@ -75,31 +75,45 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 			updated_at           = excluded.updated_at,
 			rl_limit_requests = CASE
 				WHEN excluded.rl_limit_requests > 0 OR excluded.rl_remaining_requests > 0 THEN excluded.rl_limit_requests
-				ELSE account_states.rl_limit_requests
+				WHEN account_states.rl_reset_requests IS NOT NULL
+				     AND datetime(account_states.rl_reset_requests) > datetime('now') THEN account_states.rl_limit_requests
+				ELSE excluded.rl_limit_requests
 			END,
 			rl_remaining_requests = CASE
 				WHEN excluded.rl_limit_requests > 0 OR excluded.rl_remaining_requests > 0 THEN excluded.rl_remaining_requests
-				ELSE account_states.rl_remaining_requests
+				WHEN account_states.rl_reset_requests IS NOT NULL
+				     AND datetime(account_states.rl_reset_requests) > datetime('now') THEN account_states.rl_remaining_requests
+				ELSE excluded.rl_remaining_requests
 			END,
 			rl_reset_requests = CASE
 				WHEN excluded.rl_limit_requests > 0 OR excluded.rl_remaining_requests > 0 THEN excluded.rl_reset_requests
-				ELSE account_states.rl_reset_requests
+				WHEN account_states.rl_reset_requests IS NOT NULL
+				     AND datetime(account_states.rl_reset_requests) > datetime('now') THEN account_states.rl_reset_requests
+				ELSE excluded.rl_reset_requests
 			END,
 			rl_limit_tokens = CASE
 				WHEN excluded.rl_limit_tokens > 0 OR excluded.rl_remaining_tokens > 0 THEN excluded.rl_limit_tokens
-				ELSE account_states.rl_limit_tokens
+				WHEN account_states.rl_reset_tokens IS NOT NULL
+				     AND datetime(account_states.rl_reset_tokens) > datetime('now') THEN account_states.rl_limit_tokens
+				ELSE excluded.rl_limit_tokens
 			END,
 			rl_remaining_tokens = CASE
 				WHEN excluded.rl_limit_tokens > 0 OR excluded.rl_remaining_tokens > 0 THEN excluded.rl_remaining_tokens
-				ELSE account_states.rl_remaining_tokens
+				WHEN account_states.rl_reset_tokens IS NOT NULL
+				     AND datetime(account_states.rl_reset_tokens) > datetime('now') THEN account_states.rl_remaining_tokens
+				ELSE excluded.rl_remaining_tokens
 			END,
 			rl_reset_tokens = CASE
 				WHEN excluded.rl_limit_tokens > 0 OR excluded.rl_remaining_tokens > 0 THEN excluded.rl_reset_tokens
-				ELSE account_states.rl_reset_tokens
+				WHEN account_states.rl_reset_tokens IS NOT NULL
+				     AND datetime(account_states.rl_reset_tokens) > datetime('now') THEN account_states.rl_reset_tokens
+				ELSE excluded.rl_reset_tokens
 			END,
 			rl_updated_at = CASE
 				WHEN excluded.rl_updated_at IS NOT NULL THEN excluded.rl_updated_at
-				ELSE account_states.rl_updated_at
+				WHEN account_states.rl_reset_requests IS NOT NULL
+				     AND datetime(account_states.rl_reset_requests) > datetime('now') THEN account_states.rl_updated_at
+				ELSE excluded.rl_updated_at
 			END
 	`)
 	if err != nil {
@@ -123,7 +137,7 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 			}
 		}
 		var nra *string
-		if !a.NextRetryAfter.IsZero() {
+		if !a.NextRetryAfter.IsZero() && a.Quota.Exceeded {
 			s := a.NextRetryAfter.UTC().Format(time.RFC3339)
 			nra = &s
 		}
@@ -256,7 +270,7 @@ func GetTargetsForKeepalive(db *sql.DB) ([]string, error) {
 	rows, err := db.Query(`
 		SELECT auth_index FROM account_states
 		WHERE unavailable = 1 AND next_retry_after IS NOT NULL
-		  AND next_retry_after <= datetime('now')
+		  AND datetime(next_retry_after) <= datetime('now')
 	`)
 	if err != nil {
 		return nil, err

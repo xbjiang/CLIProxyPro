@@ -188,7 +188,7 @@ func QueryDaily(ctx context.Context, db *sql.DB, days int) ([]DailyStat, error) 
 			COALESCE(SUM(reasoning_tokens),0),
 			COALESCE(SUM(cached_tokens),0)
 		FROM usage_records
-		WHERE timestamp >= datetime('now', ? || ' days')
+		WHERE datetime(timestamp) >= datetime('now', ? || ' days')
 		GROUP BY day ORDER BY day ASC`,
 		fmt.Sprintf("-%d", days),
 	)
