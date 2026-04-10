@@ -2,10 +2,11 @@ package persistence
 
 import (
 	"context"
-	"database/sql"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	coreusage "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
@@ -250,7 +251,18 @@ type AccountCycleStat struct {
 // QueryPerAccountCycles returns usage stats per account within each account's current quota cycle.
 // Primary: use account_reset_history to find the previous reset time (precise cycle boundary).
 // Fallback: if no history, use [cycle_end - 7 days, cycle_end) approximation.
-func QueryPerAccountCycles(ctx context.Context, db *sql.DB) ([]AccountCycleStat, error) {
+// activeIndexes: if non-empty, only include accounts whose auth_index is in this list (filters ghost records).
+func QueryPerAccountCycles(ctx context.Context, db *sql.DB, activeIndexes []string) ([]AccountCycleStat, error) {
+	indexCond := ""
+	args := make([]interface{}, 0, len(activeIndexes))
+	if len(activeIndexes) > 0 {
+		ph := make([]string, len(activeIndexes))
+		for i, idx := range activeIndexes {
+			ph[i] = "?"
+			args = append(args, idx)
+		}
+		indexCond = " WHERE a.auth_index IN (" + strings.Join(ph, ",") + ")"
+	}
 	rows, err := db.QueryContext(ctx, `
 		WITH anchors AS MATERIALIZED (
 			SELECT
@@ -260,9 +272,10 @@ func QueryPerAccountCycles(ctx context.Context, db *sql.DB) ([]AccountCycleStat,
 				(SELECT h.rl_reset_requests FROM account_reset_history h
 				 WHERE h.auth_index = a.auth_index
 				   AND h.rl_reset_requests < COALESCE(NULLIF(a.rl_reset_requests, ''), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+				   AND h.rl_reset_requests < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 				 ORDER BY h.rl_reset_requests DESC LIMIT 1
 				) as prev_reset
-			FROM account_states a
+			FROM account_states a`+indexCond+`
 		),
 		current_cycle AS MATERIALIZED (
 			SELECT auth_index, email,
@@ -288,7 +301,7 @@ func QueryPerAccountCycles(ctx context.Context, db *sql.DB) ([]AccountCycleStat,
 			AND u.timestamp >= cc.cycle_start
 			AND u.timestamp < cc.cycle_end
 		GROUP BY cc.auth_index
-		ORDER BY total_tokens DESC`)
+		ORDER BY total_tokens DESC`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -329,10 +342,22 @@ type AccountCycleHistory struct {
 // Primary: use account_reset_history for precise cycle boundaries. Each recorded
 // rl_reset_requests is a cycle_end; the previous recorded reset is the cycle_start.
 // Fallback: for the oldest recorded cycle (no previous reset), use cycle_end - 7d.
-func QueryAccountCycleHistory(ctx context.Context, db *sql.DB, maxCycles int) ([]AccountCycleHistory, error) {
+// activeIndexes: if non-empty, only include accounts whose auth_index is in this list (filters ghost records).
+func QueryAccountCycleHistory(ctx context.Context, db *sql.DB, maxCycles int, activeIndexes []string) ([]AccountCycleHistory, error) {
 	if maxCycles <= 0 {
 		maxCycles = 10
 	}
+	indexCond := ""
+	args := make([]interface{}, 0, len(activeIndexes)+1)
+	if len(activeIndexes) > 0 {
+		ph := make([]string, len(activeIndexes))
+		for i, idx := range activeIndexes {
+			ph[i] = "?"
+			args = append(args, idx)
+		}
+		indexCond = " AND a.auth_index IN (" + strings.Join(ph, ",") + ")"
+	}
+	args = append(args, maxCycles)
 	rows, err := db.QueryContext(ctx, `
 		WITH resets AS MATERIALIZED (
 			SELECT
@@ -342,7 +367,7 @@ func QueryAccountCycleHistory(ctx context.Context, db *sql.DB, maxCycles int) ([
 				LAG(h.rl_reset_requests) OVER (PARTITION BY h.auth_index ORDER BY h.rl_reset_requests) as prev_reset,
 				ROW_NUMBER() OVER (PARTITION BY h.auth_index ORDER BY h.rl_reset_requests DESC) - 1 as cycle_num
 			FROM account_reset_history h
-			JOIN account_states a ON a.auth_index = h.auth_index
+			JOIN account_states a ON a.auth_index = h.auth_index`+indexCond+`
 		),
 		cycles AS MATERIALIZED (
 			SELECT
@@ -365,7 +390,7 @@ func QueryAccountCycleHistory(ctx context.Context, db *sql.DB, maxCycles int) ([
 			AND u.timestamp < c.cycle_end
 		GROUP BY c.auth_index, c.cycle_num
 		ORDER BY c.auth_index, c.cycle_num ASC`,
-		maxCycles,
+		args...,
 	)
 	if err != nil {
 		return nil, err

@@ -44,6 +44,16 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 	}
 	defer histStmt.Close()
 
+	// maxResetStmt fetches the latest recorded reset_time for a given auth_index,
+	// used to suppress near-duplicate writes caused by per-request header drift.
+	maxResetStmt, err := tx.Prepare(`
+		SELECT MAX(rl_reset_requests) FROM account_reset_history WHERE auth_index = ?
+	`)
+	if err != nil {
+		return err
+	}
+	defer maxResetStmt.Close()
+
 	stmt, err := tx.Prepare(`
 		INSERT INTO account_states
 			(auth_index, auth_id, email, name, label, unavailable, disabled,
@@ -181,8 +191,26 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 			return err
 		}
 		if rlResetReq != nil {
-			if _, err := histStmt.Exec(idx, *rlResetReq, now); err != nil {
-				return err
+			// Only record a new cycle boundary if it is at least 6 days after the
+			// latest already-recorded reset for this account. This suppresses the
+			// seconds-level drift seen in per-request response headers, which would
+			// otherwise pollute the history with meaningless near-duplicate entries.
+			var maxReset sql.NullString
+			_ = maxResetStmt.QueryRow(idx).Scan(&maxReset)
+			shouldRecord := true
+			if maxReset.Valid && maxReset.String != "" {
+				if last, err2 := time.Parse(time.RFC3339, maxReset.String); err2 == nil {
+					if next, err2 := time.Parse(time.RFC3339, *rlResetReq); err2 == nil {
+						if next.Sub(last) < 6*24*time.Hour {
+							shouldRecord = false
+						}
+					}
+				}
+			}
+			if shouldRecord {
+				if _, err := histStmt.Exec(idx, *rlResetReq, now); err != nil {
+					return err
+				}
 			}
 		}
 	}

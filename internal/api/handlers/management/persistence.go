@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -119,12 +120,55 @@ func (h *Handler) GetUsagePerAccountCycles(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "persistence not available"})
 		return
 	}
-	rows, err := persistence.QueryPerAccountCycles(c.Request.Context(), db)
+	// Query all records (including ghost credentials from replaced auth files).
+	// Deduplication by email is done in Go so that accounts which recently
+	// re-authenticated show their last meaningful cycle even if the new
+	// credential's current cycle has 0 tokens.
+	all, err := persistence.QueryPerAccountCycles(c.Request.Context(), db, nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"accounts": rows})
+	if h.authManager == nil {
+		c.JSON(http.StatusOK, gin.H{"accounts": all})
+		return
+	}
+
+	// Build set of currently active emails.
+	activeEmails := make(map[string]bool)
+	for _, a := range h.authManager.List() {
+		if email := authEmail(a); email != "" {
+			activeEmails[email] = true
+		}
+	}
+
+	// Per email, keep the row with the highest total_tokens (ties broken by latest cycle_end).
+	type bestEntry struct {
+		row persistence.AccountCycleStat
+	}
+	byEmail := make(map[string]bestEntry)
+	for _, row := range all {
+		if row.Email == "" {
+			continue
+		}
+		cur, exists := byEmail[row.Email]
+		if !exists || row.TotalTokens > cur.row.TotalTokens ||
+			(row.TotalTokens == cur.row.TotalTokens && row.CycleEnd > cur.row.CycleEnd) {
+			byEmail[row.Email] = bestEntry{row: row}
+		}
+	}
+
+	// Collect results for active emails only, sorted by total_tokens desc.
+	result := make([]persistence.AccountCycleStat, 0, len(activeEmails))
+	for email := range activeEmails {
+		if b, ok := byEmail[email]; ok {
+			result = append(result, b.row)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].TotalTokens > result[j].TotalTokens
+	})
+	c.JSON(http.StatusOK, gin.H{"accounts": result})
 }
 
 // GetAccountCycleHistory returns multi-cycle usage history per account.
@@ -141,12 +185,29 @@ func (h *Handler) GetAccountCycleHistory(c *gin.Context) {
 			maxCycles = n
 		}
 	}
-	rows, err := persistence.QueryAccountCycleHistory(c.Request.Context(), db, maxCycles)
+	activeIndexes := h.activeAuthIndexes()
+	rows, err := persistence.QueryAccountCycleHistory(c.Request.Context(), db, maxCycles, activeIndexes)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"accounts": rows})
+}
+
+// activeAuthIndexes returns the auth_index list of currently loaded auth files.
+// Returns nil if authManager is unavailable (callee treats nil as "no filter").
+func (h *Handler) activeAuthIndexes() []string {
+	if h.authManager == nil {
+		return nil
+	}
+	auths := h.authManager.List()
+	indexes := make([]string, 0, len(auths))
+	for _, a := range auths {
+		if a.Index != "" {
+			indexes = append(indexes, a.Index)
+		}
+	}
+	return indexes
 }
 
 // getPersistenceDB returns the db field (nil-safe).
