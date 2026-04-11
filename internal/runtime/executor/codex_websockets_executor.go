@@ -233,6 +233,10 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	helps.RecordAPIWebsocketRequest(ctx, e.cfg, wsReqLog)
 
 	conn, respHS, errDial := e.ensureUpstreamConn(ctx, auth, sess, authID, wsURL, wsHeaders)
+	var upstreamHeaders http.Header
+	if respHS != nil {
+		upstreamHeaders = respHS.Header.Clone()
+	}
 	if errDial != nil {
 		bodyErr := websocketHandshakeBody(respHS)
 		if respHS != nil {
@@ -353,7 +357,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 			}
 			var param any
 			out := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, originalPayload, body, payload, &param)
-			resp = cliproxyexecutor.Response{Payload: out}
+			resp = cliproxyexecutor.Response{Payload: out, Headers: upstreamHeaders}
 			return resp, nil
 		}
 	}
