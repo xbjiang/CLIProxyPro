@@ -179,7 +179,7 @@ type DailyStat struct {
 func QueryDaily(ctx context.Context, db *sql.DB, days int) ([]DailyStat, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT
-			DATE(timestamp) as day,
+			DATE(timestamp, 'localtime') as day,
 			COUNT(*),
 			SUM(CASE WHEN failed=0 THEN 1 ELSE 0 END),
 			SUM(CASE WHEN failed=1 THEN 1 ELSE 0 END),
@@ -189,7 +189,7 @@ func QueryDaily(ctx context.Context, db *sql.DB, days int) ([]DailyStat, error) 
 			COALESCE(SUM(reasoning_tokens),0),
 			COALESCE(SUM(cached_tokens),0)
 		FROM usage_records
-		WHERE datetime(timestamp) >= datetime('now', ? || ' days')
+		WHERE datetime(timestamp, 'localtime') >= datetime('now', 'localtime', ? || ' days')
 		GROUP BY day ORDER BY day ASC`,
 		fmt.Sprintf("-%d", days),
 	)
@@ -462,7 +462,7 @@ func QueryByDateRange(ctx context.Context, db *sql.DB, startDate, endDate string
 			COALESCE(SUM(cached_tokens),0),
 			COALESCE(SUM(CASE WHEN failed=1 THEN 1 ELSE 0 END),0)
 		FROM usage_records
-		WHERE DATE(timestamp) >= ? AND DATE(timestamp) <= ?`,
+		WHERE DATE(timestamp, 'localtime') >= ? AND DATE(timestamp, 'localtime') <= ?`,
 		startDate, endDate)
 	if err := row.Scan(
 		&stats.TotalRequests,
@@ -480,7 +480,7 @@ func QueryByDateRange(ctx context.Context, db *sql.DB, startDate, endDate string
 	rows, err := db.QueryContext(ctx, `
 		SELECT model, COUNT(*), COALESCE(SUM(total_tokens),0), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0)
 		FROM usage_records
-		WHERE DATE(timestamp) >= ? AND DATE(timestamp) <= ?
+		WHERE DATE(timestamp, 'localtime') >= ? AND DATE(timestamp, 'localtime') <= ?
 		GROUP BY model ORDER BY COUNT(*) DESC LIMIT 50`,
 		startDate, endDate)
 	if err != nil {
@@ -499,7 +499,7 @@ func QueryByDateRange(ctx context.Context, db *sql.DB, startDate, endDate string
 	rows2, err := db.QueryContext(ctx, `
 		SELECT COALESCE(auth_index,''), COALESCE(auth_id,''), COUNT(*), COALESCE(SUM(total_tokens),0)
 		FROM usage_records
-		WHERE DATE(timestamp) >= ? AND DATE(timestamp) <= ?
+		WHERE DATE(timestamp, 'localtime') >= ? AND DATE(timestamp, 'localtime') <= ?
 		GROUP BY auth_index ORDER BY COUNT(*) DESC LIMIT 100`,
 		startDate, endDate)
 	if err != nil {
@@ -519,7 +519,7 @@ func QueryByDateRange(ctx context.Context, db *sql.DB, startDate, endDate string
 		SELECT timestamp, COALESCE(source,''), model, failed, is_keepalive,
 			   input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens
 		FROM usage_records
-		WHERE DATE(timestamp) >= ? AND DATE(timestamp) <= ?
+		WHERE DATE(timestamp, 'localtime') >= ? AND DATE(timestamp, 'localtime') <= ?
 		ORDER BY timestamp DESC LIMIT 1000`,
 		startDate, endDate)
 	if err != nil {
