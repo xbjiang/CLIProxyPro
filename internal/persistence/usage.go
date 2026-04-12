@@ -73,23 +73,23 @@ func DedupHash(rec coreusage.Record) string {
 
 // AggregatedStats is returned by QueryAggregated.
 type AggregatedStats struct {
-	TotalRequests   int64            `json:"total_requests"`
-	TotalTokens     int64            `json:"total_tokens"`
-	InputTokens     int64            `json:"input_tokens"`
-	OutputTokens    int64            `json:"output_tokens"`
-	ReasoningTokens int64            `json:"reasoning_tokens"`
-	CachedTokens    int64            `json:"cached_tokens"`
-	FailedRequests  int64            `json:"failed_requests"`
-	ByModel         []ModelStat      `json:"by_model"`
-	ByAuthIndex     []AuthIndexStat  `json:"by_auth_index"`
+	TotalRequests   int64           `json:"total_requests"`
+	TotalTokens     int64           `json:"total_tokens"`
+	InputTokens     int64           `json:"input_tokens"`
+	OutputTokens    int64           `json:"output_tokens"`
+	ReasoningTokens int64           `json:"reasoning_tokens"`
+	CachedTokens    int64           `json:"cached_tokens"`
+	FailedRequests  int64           `json:"failed_requests"`
+	ByModel         []ModelStat     `json:"by_model"`
+	ByAuthIndex     []AuthIndexStat `json:"by_auth_index"`
 }
 
 type ModelStat struct {
-	Model           string `json:"model"`
-	Requests        int64  `json:"requests"`
-	TotalTokens     int64  `json:"total_tokens"`
-	InputTokens     int64  `json:"input_tokens"`
-	OutputTokens    int64  `json:"output_tokens"`
+	Model        string `json:"model"`
+	Requests     int64  `json:"requests"`
+	TotalTokens  int64  `json:"total_tokens"`
+	InputTokens  int64  `json:"input_tokens"`
+	OutputTokens int64  `json:"output_tokens"`
 }
 
 type AuthIndexStat struct {
@@ -238,6 +238,7 @@ type UsageRecord struct {
 type AccountCycleStat struct {
 	AuthIndex       string `json:"auth_index"`
 	Email           string `json:"email"`
+	WindowType      string `json:"window_type"`
 	CycleStart      string `json:"cycle_start"`
 	CycleEnd        string `json:"cycle_end"`
 	SuccessRequests int64  `json:"success_requests"`
@@ -251,6 +252,8 @@ type AccountCycleStat struct {
 // QueryPerAccountCycles returns usage stats per account within each account's current quota cycle.
 // Primary: use account_reset_history to find the previous reset time (precise cycle boundary).
 // Fallback: if no history, use [cycle_end - 7 days, cycle_end) approximation.
+// For Plus accounts (percent mode: rl_limit_requests=100 AND rl_limit_tokens=100), use the
+// secondary window (rl_reset_tokens) as cycle boundary since the primary window is only ~5 hours.
 // activeIndexes: if non-empty, only include accounts whose auth_index is in this list (filters ghost records).
 func QueryPerAccountCycles(ctx context.Context, db *sql.DB, activeIndexes []string) ([]AccountCycleStat, error) {
 	indexCond := ""
@@ -269,23 +272,44 @@ func QueryPerAccountCycles(ctx context.Context, db *sql.DB, activeIndexes []stri
 				a.auth_index,
 				COALESCE(a.email, a.name) as email,
 				COALESCE(NULLIF(a.rl_reset_requests, ''), strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) as cycle_end,
+				'primary' as wtype,
 				(SELECT h.rl_reset_requests FROM account_reset_history h
 				 WHERE h.auth_index = a.auth_index
+				   AND COALESCE(h.window_type, 'primary') = 'primary'
 				   AND h.rl_reset_requests < COALESCE(NULLIF(a.rl_reset_requests, ''), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 				   AND h.rl_reset_requests < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 				 ORDER BY h.rl_reset_requests DESC LIMIT 1
-				) as prev_reset
+				) as prev_reset,
+				(a.rl_limit_requests = 100 AND a.rl_limit_tokens = 100 AND a.rl_reset_tokens IS NOT NULL AND a.rl_reset_tokens != '') as is_plus
 			FROM account_states a`+indexCond+`
+			UNION ALL
+			SELECT
+				a.auth_index,
+				COALESCE(a.email, a.name) as email,
+				a.rl_reset_tokens as cycle_end,
+				'secondary' as wtype,
+				(SELECT h.rl_reset_requests FROM account_reset_history h
+				 WHERE h.auth_index = a.auth_index
+				   AND h.window_type = 'secondary'
+				   AND h.rl_reset_requests < a.rl_reset_tokens
+				   AND h.rl_reset_requests < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+				 ORDER BY h.rl_reset_requests DESC LIMIT 1
+				) as prev_reset,
+				1 as is_plus
+			FROM account_states a
+			WHERE a.rl_limit_requests = 100 AND a.rl_limit_tokens = 100 AND a.rl_reset_tokens IS NOT NULL AND a.rl_reset_tokens != ''
+			`+strings.ReplaceAll(indexCond, "WHERE a.", "AND a.")+`
 		),
 		current_cycle AS MATERIALIZED (
-			SELECT auth_index, email,
-				COALESCE(prev_reset, strftime('%Y-%m-%dT%H:%M:%fZ', cycle_end, '-7 days')) as cycle_start,
+			SELECT auth_index, email, wtype,
+				COALESCE(prev_reset, strftime('%Y-%m-%dT%H:%M:%fZ', cycle_end, CASE WHEN wtype = 'primary' AND is_plus = 1 THEN '-5 hours' ELSE '-7 days' END)) as cycle_start,
 				cycle_end
 			FROM anchors
 		)
 		SELECT
 			cc.auth_index,
 			cc.email,
+			cc.wtype,
 			cc.cycle_start,
 			cc.cycle_end,
 			COALESCE(SUM(CASE WHEN u.failed=0 THEN 1 ELSE 0 END), 0) as success_requests,
@@ -300,7 +324,7 @@ func QueryPerAccountCycles(ctx context.Context, db *sql.DB, activeIndexes []stri
 			AND u.is_keepalive = 0
 			AND u.timestamp >= cc.cycle_start
 			AND u.timestamp < cc.cycle_end
-		GROUP BY cc.auth_index
+		GROUP BY cc.auth_index, cc.wtype
 		ORDER BY total_tokens DESC`, args...)
 	if err != nil {
 		return nil, err
@@ -310,7 +334,7 @@ func QueryPerAccountCycles(ctx context.Context, db *sql.DB, activeIndexes []stri
 	var result []AccountCycleStat
 	for rows.Next() {
 		var s AccountCycleStat
-		if err := rows.Scan(&s.AuthIndex, &s.Email, &s.CycleStart, &s.CycleEnd,
+		if err := rows.Scan(&s.AuthIndex, &s.Email, &s.WindowType, &s.CycleStart, &s.CycleEnd,
 			&s.SuccessRequests, &s.FailedRequests, &s.TotalTokens,
 			&s.InputTokens, &s.OutputTokens, &s.ReasoningTokens); err != nil {
 			return nil, err
@@ -332,16 +356,18 @@ type CycleHistoryItem struct {
 
 // AccountCycleHistory represents an account with its multi-cycle usage history.
 type AccountCycleHistory struct {
-	AuthIndex string             `json:"auth_index"`
-	Email     string             `json:"email"`
-	CycleEnd  string             `json:"cycle_end"`
-	Cycles    []CycleHistoryItem `json:"cycles"`
+	AuthIndex  string             `json:"auth_index"`
+	Email      string             `json:"email"`
+	WindowType string             `json:"window_type"`
+	CycleEnd   string             `json:"cycle_end"`
+	Cycles     []CycleHistoryItem `json:"cycles"`
 }
 
 // QueryAccountCycleHistory returns multi-cycle usage history per account.
 // Primary: use account_reset_history for precise cycle boundaries. Each recorded
 // rl_reset_requests is a cycle_end; the previous recorded reset is the cycle_start.
 // Fallback: for the oldest recorded cycle (no previous reset), use cycle_end - 7d.
+// For Plus accounts (percent mode), use secondary window resets for cycle boundaries.
 // activeIndexes: if non-empty, only include accounts whose auth_index is in this list (filters ghost records).
 func QueryAccountCycleHistory(ctx context.Context, db *sql.DB, maxCycles int, activeIndexes []string) ([]AccountCycleHistory, error) {
 	if maxCycles <= 0 {
@@ -364,21 +390,23 @@ func QueryAccountCycleHistory(ctx context.Context, db *sql.DB, maxCycles int, ac
 				h.auth_index,
 				COALESCE(a.email, a.name) as email,
 				h.rl_reset_requests as cycle_end,
-				LAG(h.rl_reset_requests) OVER (PARTITION BY h.auth_index ORDER BY h.rl_reset_requests) as prev_reset,
-				ROW_NUMBER() OVER (PARTITION BY h.auth_index ORDER BY h.rl_reset_requests DESC) - 1 as cycle_num
+				LAG(h.rl_reset_requests) OVER (PARTITION BY h.auth_index, COALESCE(h.window_type, 'primary') ORDER BY h.rl_reset_requests) as prev_reset,
+				ROW_NUMBER() OVER (PARTITION BY h.auth_index, COALESCE(h.window_type, 'primary') ORDER BY h.rl_reset_requests DESC) - 1 as cycle_num,
+				COALESCE(h.window_type, 'primary') as wtype,
+				(a.rl_limit_requests = 100 AND a.rl_limit_tokens = 100 AND a.rl_reset_tokens IS NOT NULL AND a.rl_reset_tokens != '') as is_plus
 			FROM account_reset_history h
-			JOIN account_states a ON a.auth_index = h.auth_index`+indexCond+`
+			JOIN account_states a ON a.auth_index = h.auth_index `+indexCond+`
 		),
 		cycles AS MATERIALIZED (
 			SELECT
-				r.auth_index, r.email, r.cycle_num,
-				COALESCE(r.prev_reset, strftime('%Y-%m-%dT%H:%M:%fZ', r.cycle_end, '-7 days')) as cycle_start,
+				r.auth_index, r.email, r.cycle_num, r.wtype,
+				COALESCE(r.prev_reset, strftime('%Y-%m-%dT%H:%M:%fZ', r.cycle_end, CASE WHEN r.is_plus = 1 AND r.wtype = 'primary' THEN '-5 hours' ELSE '-7 days' END)) as cycle_start,
 				r.cycle_end
 			FROM resets r
 			WHERE r.cycle_num < ?
 		)
 		SELECT
-			c.auth_index, c.email, c.cycle_num, c.cycle_start, c.cycle_end,
+			c.auth_index, c.email, c.wtype, c.cycle_num, c.cycle_start, c.cycle_end,
 			COALESCE(SUM(CASE WHEN u.failed=0 THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN u.failed=1 THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN u.failed=0 THEN u.total_tokens ELSE 0 END), 0)
@@ -388,8 +416,8 @@ func QueryAccountCycleHistory(ctx context.Context, db *sql.DB, maxCycles int, ac
 			AND u.is_keepalive = 0
 			AND u.timestamp >= c.cycle_start
 			AND u.timestamp < c.cycle_end
-		GROUP BY c.auth_index, c.cycle_num
-		ORDER BY c.auth_index, c.cycle_num ASC`,
+		GROUP BY c.auth_index, c.wtype, c.cycle_num
+		ORDER BY c.auth_index, c.wtype, c.cycle_num ASC`,
 		args...,
 	)
 	if err != nil {
@@ -400,6 +428,7 @@ func QueryAccountCycleHistory(ctx context.Context, db *sql.DB, maxCycles int, ac
 	type flatRow struct {
 		authIndex       string
 		email           string
+		wtype           string
 		cycleNum        int
 		cycleStart      string
 		cycleEnd        string
@@ -410,7 +439,7 @@ func QueryAccountCycleHistory(ctx context.Context, db *sql.DB, maxCycles int, ac
 	var flat []flatRow
 	for rows.Next() {
 		var r flatRow
-		if err := rows.Scan(&r.authIndex, &r.email, &r.cycleNum, &r.cycleStart, &r.cycleEnd,
+		if err := rows.Scan(&r.authIndex, &r.email, &r.wtype, &r.cycleNum, &r.cycleStart, &r.cycleEnd,
 			&r.successRequests, &r.failedRequests, &r.totalTokens); err != nil {
 			return nil, err
 		}
@@ -420,15 +449,16 @@ func QueryAccountCycleHistory(ctx context.Context, db *sql.DB, maxCycles int, ac
 	indexMap := make(map[string]*AccountCycleHistory)
 	var order []string
 	for _, r := range flat {
-		h, ok := indexMap[r.authIndex]
+		key := r.authIndex + "|" + r.wtype
+		h, ok := indexMap[key]
 		if !ok {
 			h = &AccountCycleHistory{
-				AuthIndex: r.authIndex,
-				Email:     r.email,
-				CycleEnd:  r.cycleEnd,
+				AuthIndex:  r.authIndex,
+				Email:      r.email,
+				WindowType: r.wtype,
 			}
-			indexMap[r.authIndex] = h
-			order = append(order, r.authIndex)
+			indexMap[key] = h
+			order = append(order, key)
 		}
 		h.Cycles = append(h.Cycles, CycleHistoryItem{
 			CycleNum:        r.cycleNum,

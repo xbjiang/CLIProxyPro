@@ -9,20 +9,20 @@ import (
 
 // AccountStateRow mirrors the account_states table.
 type AccountStateRow struct {
-	AuthIndex            string
-	AuthID               string
-	Email                string
-	Name                 string
-	Label                string
-	Unavailable          bool
-	Disabled             bool
-	NextRetryAfter       *time.Time // nil = no restriction
-	QuotaBackoffLvl      int
-	Status               string
-	StatusMessage        string
-	UpdatedAt            time.Time
-	LastKeepaliveSentAt  *time.Time // nil = never sent
-	RateLimit            *coreauth.RateLimitInfo
+	AuthIndex           string
+	AuthID              string
+	Email               string
+	Name                string
+	Label               string
+	Unavailable         bool
+	Disabled            bool
+	NextRetryAfter      *time.Time // nil = no restriction
+	QuotaBackoffLvl     int
+	Status              string
+	StatusMessage       string
+	UpdatedAt           time.Time
+	LastKeepaliveSentAt *time.Time // nil = never sent
+	RateLimit           *coreauth.RateLimitInfo
 }
 
 // UpsertAccountStates writes the given auth entries, applying the CASE logic for
@@ -209,6 +209,36 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 			}
 			if shouldRecord {
 				if _, err := histStmt.Exec(idx, *rlResetReq, now); err != nil {
+					return err
+				}
+			}
+		}
+		// Record secondary window (weekly quota) reset for Plus accounts.
+		// Plus accounts use percent mode (limit=100) and have a separate weekly
+		// reset tracked in rl_reset_tokens. Apply the same 6-day dedup threshold
+		// to avoid near-duplicate entries caused by header drift.
+		isPctMode := rlLimitReq == 100 && rlLimitTok == 100
+		if isPctMode && rlResetTok != nil {
+			var maxSecondaryReset sql.NullString
+			_ = tx.QueryRow(`
+				SELECT MAX(rl_reset_requests) FROM account_reset_history
+				WHERE auth_index = ? AND window_type = 'secondary'
+			`, idx).Scan(&maxSecondaryReset)
+			shouldRecordSecondary := true
+			if maxSecondaryReset.Valid && maxSecondaryReset.String != "" {
+				if last, err2 := time.Parse(time.RFC3339, maxSecondaryReset.String); err2 == nil {
+					if next, err2 := time.Parse(time.RFC3339, *rlResetTok); err2 == nil {
+						if next.Sub(last) < 6*24*time.Hour {
+							shouldRecordSecondary = false
+						}
+					}
+				}
+			}
+			if shouldRecordSecondary {
+				if _, err := tx.Exec(`
+					INSERT OR IGNORE INTO account_reset_history (auth_index, rl_reset_requests, recorded_at, window_type)
+					VALUES (?, ?, ?, 'secondary')
+				`, idx, *rlResetTok, now); err != nil {
 					return err
 				}
 			}

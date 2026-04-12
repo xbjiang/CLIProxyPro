@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -142,7 +143,7 @@ func (h *Handler) GetUsagePerAccountCycles(c *gin.Context) {
 		}
 	}
 
-	// Per email, keep the row with the highest total_tokens (ties broken by latest cycle_end).
+	// Per email and window_type, keep the row with the highest total_tokens (ties broken by latest cycle_end).
 	type bestEntry struct {
 		row persistence.AccountCycleStat
 	}
@@ -151,17 +152,19 @@ func (h *Handler) GetUsagePerAccountCycles(c *gin.Context) {
 		if row.Email == "" {
 			continue
 		}
-		cur, exists := byEmail[row.Email]
+		key := row.Email + "|" + row.WindowType
+		cur, exists := byEmail[key]
 		if !exists || row.TotalTokens > cur.row.TotalTokens ||
 			(row.TotalTokens == cur.row.TotalTokens && row.CycleEnd > cur.row.CycleEnd) {
-			byEmail[row.Email] = bestEntry{row: row}
+			byEmail[key] = bestEntry{row: row}
 		}
 	}
 
 	// Collect results for active emails only, sorted by total_tokens desc.
-	result := make([]persistence.AccountCycleStat, 0, len(activeEmails))
-	for email := range activeEmails {
-		if b, ok := byEmail[email]; ok {
+	result := make([]persistence.AccountCycleStat, 0)
+	for key, b := range byEmail {
+		email := strings.Split(key, "|")[0]
+		if activeEmails[email] {
 			result = append(result, b.row)
 		}
 	}

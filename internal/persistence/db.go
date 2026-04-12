@@ -132,5 +132,26 @@ CREATE INDEX IF NOT EXISTS idx_arh_auth_index ON account_reset_history(auth_inde
 		WHERE rl_reset_requests IS NOT NULL AND rl_reset_requests != ''
 	`)
 
+	// Migration: add window_type column to account_reset_history for dual-window support (Plus accounts).
+	// 'primary' = short-term window (default), 'secondary' = weekly quota window.
+	var wtExists bool
+	if qErr := db.QueryRow(`
+		SELECT COUNT(*) > 0 FROM pragma_table_info('account_reset_history')
+		WHERE name = 'window_type'
+	`).Scan(&wtExists); qErr == nil && !wtExists {
+		if _, aErr := db.Exec(`ALTER TABLE account_reset_history ADD COLUMN window_type TEXT NOT NULL DEFAULT 'primary'`); aErr != nil {
+			return fmt.Errorf("persistence: add window_type column to account_reset_history: %w", aErr)
+		}
+	}
+
+	// Seed secondary window history from existing account_states rl_reset_tokens
+	_, _ = db.Exec(`
+		INSERT OR IGNORE INTO account_reset_history (auth_index, rl_reset_requests, recorded_at, window_type)
+		SELECT auth_index, rl_reset_tokens, datetime('now'), 'secondary'
+		FROM account_states
+		WHERE rl_reset_tokens IS NOT NULL AND rl_reset_tokens != ''
+		  AND rl_limit_requests = 100 AND rl_limit_tokens = 100
+	`)
+
 	return nil
 }
