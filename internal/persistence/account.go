@@ -36,8 +36,8 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 	defer func() { _ = tx.Rollback() }()
 
 	histStmt, err := tx.Prepare(`
-		INSERT OR IGNORE INTO account_reset_history (auth_index, rl_reset_requests, recorded_at)
-		VALUES (?, ?, ?)
+		INSERT OR IGNORE INTO account_reset_history (auth_index, rl_reset_requests, recorded_at, window_type)
+		VALUES (?, ?, ?, 'primary')
 	`)
 	if err != nil {
 		return err
@@ -47,7 +47,7 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 	// maxResetStmt fetches the latest recorded reset_time for a given auth_index,
 	// used to suppress near-duplicate writes caused by per-request header drift.
 	maxResetStmt, err := tx.Prepare(`
-		SELECT MAX(rl_reset_requests) FROM account_reset_history WHERE auth_index = ?
+		SELECT MAX(rl_reset_requests) FROM account_reset_history WHERE auth_index = ? AND (window_type = 'primary' OR window_type IS NULL)
 	`)
 	if err != nil {
 		return err
@@ -96,9 +96,9 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 				ELSE excluded.rl_remaining_requests
 			END,
 			rl_reset_requests = CASE
-				WHEN excluded.rl_limit_requests > 0 OR excluded.rl_remaining_requests > 0 THEN excluded.rl_reset_requests
-				WHEN account_states.rl_reset_requests IS NOT NULL
-				     AND datetime(account_states.rl_reset_requests) > datetime('now') THEN account_states.rl_reset_requests
+				WHEN (excluded.rl_limit_requests > 0 OR excluded.rl_remaining_requests > 0) AND excluded.rl_reset_requests IS NOT NULL AND datetime(excluded.rl_reset_requests) > datetime('now') THEN excluded.rl_reset_requests
+				WHEN account_states.rl_reset_requests IS NOT NULL AND datetime(account_states.rl_reset_requests) > datetime('now') THEN account_states.rl_reset_requests
+				WHEN (excluded.rl_limit_requests > 0 OR excluded.rl_remaining_requests > 0) AND excluded.rl_reset_requests IS NOT NULL THEN excluded.rl_reset_requests
 				ELSE excluded.rl_reset_requests
 			END,
 			rl_limit_tokens = CASE
@@ -114,9 +114,9 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 				ELSE excluded.rl_remaining_tokens
 			END,
 			rl_reset_tokens = CASE
-				WHEN excluded.rl_limit_tokens > 0 OR excluded.rl_remaining_tokens > 0 THEN excluded.rl_reset_tokens
-				WHEN account_states.rl_reset_tokens IS NOT NULL
-				     AND datetime(account_states.rl_reset_tokens) > datetime('now') THEN account_states.rl_reset_tokens
+				WHEN (excluded.rl_limit_tokens > 0 OR excluded.rl_remaining_tokens > 0) AND excluded.rl_reset_tokens IS NOT NULL AND datetime(excluded.rl_reset_tokens) > datetime('now') THEN excluded.rl_reset_tokens
+				WHEN account_states.rl_reset_tokens IS NOT NULL AND datetime(account_states.rl_reset_tokens) > datetime('now') THEN account_states.rl_reset_tokens
+				WHEN (excluded.rl_limit_tokens > 0 OR excluded.rl_remaining_tokens > 0) AND excluded.rl_reset_tokens IS NOT NULL THEN excluded.rl_reset_tokens
 				ELSE excluded.rl_reset_tokens
 			END,
 			rl_updated_at = CASE
@@ -191,17 +191,16 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 			return err
 		}
 		if rlResetReq != nil {
-			// Only record a new cycle boundary if it is at least 6 days after the
-			// latest already-recorded reset for this account. This suppresses the
-			// seconds-level drift seen in per-request response headers, which would
-			// otherwise pollute the history with meaningless near-duplicate entries.
+			// Only record a new cycle boundary if it is at least roughly a full cycle length 
+			// after the latest already-recorded reset. We use 1 hour threshold to suppress
+			// seconds-level drift and allow both 5-hour and 7-day cycles to register properly.
 			var maxReset sql.NullString
 			_ = maxResetStmt.QueryRow(idx).Scan(&maxReset)
 			shouldRecord := true
 			if maxReset.Valid && maxReset.String != "" {
 				if last, err2 := time.Parse(time.RFC3339, maxReset.String); err2 == nil {
 					if next, err2 := time.Parse(time.RFC3339, *rlResetReq); err2 == nil {
-						if next.Sub(last) < 6*24*time.Hour {
+						if next.Sub(last) < 1*time.Hour {
 							shouldRecord = false
 						}
 					}
