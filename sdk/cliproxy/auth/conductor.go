@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/kacontext"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
@@ -581,31 +582,36 @@ func executionResultModel(routeModel, upstreamModel string, pooled bool) string 
 	return strings.TrimSpace(upstreamModel)
 }
 
-func (m *Manager) filterExecutionModels(auth *Auth, routeModel string, candidates []string, pooled bool) []string {
+func (m *Manager) filterExecutionModels(ctx context.Context, auth *Auth, routeModel string, candidates []string, pooled bool) []string {
 	if len(candidates) == 0 {
 		return nil
 	}
+	// Keepalive and force-probe requests must bypass the per-model block check
+	// so that probing an unavailable account actually sends a request upstream.
+	bypassBlock := kacontext.IsKeepaliveContext(ctx) || kacontext.IsForceProbeContext(ctx)
 	now := time.Now()
 	out := make([]string, 0, len(candidates))
 	for _, upstreamModel := range candidates {
-		stateModel := m.stateModelForExecution(auth, routeModel, upstreamModel, pooled)
-		blocked, _, _ := isAuthBlockedForModel(auth, stateModel, now)
-		if blocked {
-			continue
+		if !bypassBlock {
+			stateModel := m.stateModelForExecution(auth, routeModel, upstreamModel, pooled)
+			blocked, _, _ := isAuthBlockedForModel(auth, stateModel, now)
+			if blocked {
+				continue
+			}
 		}
 		out = append(out, upstreamModel)
 	}
 	return out
 }
 
-func (m *Manager) preparedExecutionModels(auth *Auth, routeModel string) ([]string, bool) {
+func (m *Manager) preparedExecutionModels(ctx context.Context, auth *Auth, routeModel string) ([]string, bool) {
 	candidates := m.executionModelCandidates(auth, routeModel)
 	pooled := len(candidates) > 1
-	return m.filterExecutionModels(auth, routeModel, candidates, pooled), pooled
+	return m.filterExecutionModels(ctx, auth, routeModel, candidates, pooled), pooled
 }
 
-func (m *Manager) prepareExecutionModels(auth *Auth, routeModel string) []string {
-	models, _ := m.preparedExecutionModels(auth, routeModel)
+func (m *Manager) prepareExecutionModels(ctx context.Context, auth *Auth, routeModel string) []string {
+	models, _ := m.preparedExecutionModels(ctx, auth, routeModel)
 	return models
 }
 
@@ -1309,7 +1315,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			execCtx = context.WithValue(execCtx, "cliproxy.roundtripper", rt)
 		}
 
-		models, pooled := m.preparedExecutionModels(auth, routeModel)
+		models, pooled := m.preparedExecutionModels(ctx, auth, routeModel)
 		if len(models) == 0 {
 			continue
 		}
@@ -1387,7 +1393,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			execCtx = context.WithValue(execCtx, "cliproxy.roundtripper", rt)
 		}
 
-		models, pooled := m.preparedExecutionModels(auth, routeModel)
+		models, pooled := m.preparedExecutionModels(ctx, auth, routeModel)
 		if len(models) == 0 {
 			continue
 		}
@@ -1472,7 +1478,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			execCtx = context.WithValue(execCtx, roundTripperContextKey{}, rt)
 			execCtx = context.WithValue(execCtx, "cliproxy.roundtripper", rt)
 		}
-		models, pooled := m.preparedExecutionModels(auth, routeModel)
+		models, pooled := m.preparedExecutionModels(ctx, auth, routeModel)
 		if len(models) == 0 {
 			continue
 		}
