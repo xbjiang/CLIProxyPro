@@ -586,9 +586,14 @@ func (m *Manager) filterExecutionModels(ctx context.Context, auth *Auth, routeMo
 	if len(candidates) == 0 {
 		return nil
 	}
-	// Keepalive and force-probe requests must bypass the per-model block check
-	// so that probing an unavailable account actually sends a request upstream.
+	// Keepalive, force-probe, and globally-pinned requests must bypass the
+	// per-model block check so the request always reaches upstream.
 	bypassBlock := kacontext.IsKeepaliveContext(ctx) || kacontext.IsForceProbeContext(ctx)
+	if !bypassBlock && auth != nil {
+		if pin := m.GetGlobalPinnedAuth(); pin != "" && pin == auth.ID {
+			bypassBlock = true
+		}
+	}
 	now := time.Now()
 	out := make([]string, 0, len(candidates))
 	for _, upstreamModel := range candidates {
@@ -2684,10 +2689,18 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 		m.mu.RUnlock()
 		return nil, nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
-	available, errAvailable := m.availableAuthsForRouteModel(candidates, provider, model, time.Now())
-	if errAvailable != nil {
-		m.mu.RUnlock()
-		return nil, nil, errAvailable
+	// When a specific auth is pinned (global priority or metadata pin), bypass
+	// cooldown/availability checks so the request always reaches upstream.
+	var available []*Auth
+	if pinnedAuthID != "" {
+		available = candidates
+	} else {
+		var errAvailable error
+		available, errAvailable = m.availableAuthsForRouteModel(candidates, provider, model, time.Now())
+		if errAvailable != nil {
+			m.mu.RUnlock()
+			return nil, nil, errAvailable
+		}
 	}
 	selected, errPick := m.selector.Pick(ctx, provider, selectionArgForSelector(m.selector, model), opts, available)
 	if errPick != nil {
@@ -2820,10 +2833,18 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 		m.mu.RUnlock()
 		return nil, nil, "", &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
-	available, errAvailable := m.availableAuthsForRouteModel(candidates, "mixed", model, time.Now())
-	if errAvailable != nil {
-		m.mu.RUnlock()
-		return nil, nil, "", errAvailable
+	// When a specific auth is pinned (global priority or metadata pin), bypass
+	// cooldown/availability checks so the request always reaches upstream.
+	var available []*Auth
+	if pinnedAuthID != "" {
+		available = candidates
+	} else {
+		var errAvailable error
+		available, errAvailable = m.availableAuthsForRouteModel(candidates, "mixed", model, time.Now())
+		if errAvailable != nil {
+			m.mu.RUnlock()
+			return nil, nil, "", errAvailable
+		}
 	}
 	selected, errPick := m.selector.Pick(ctx, "mixed", selectionArgForSelector(m.selector, model), opts, available)
 	if errPick != nil {

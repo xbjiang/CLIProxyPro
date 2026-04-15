@@ -288,20 +288,23 @@ func (h *Handler) TriggerKeepalive(c *gin.Context) {
 		}
 	}
 
-	// Async mode: record sent_at immediately and execute in background.
+	// Async mode: execute in background, record sent_at only after success.
 	if body.Async {
-		now := time.Now()
-		for _, authID := range unique {
-			if err := sched.RecordKeepaliveSentAt(authID, now); err != nil {
-				log.Warnf("keepalive: failed to pre-record sent_at for async trigger: %v", err)
-			}
-		}
 		go func() {
 			ctx := context.Background()
+			var results []keepalive.KeepaliveResult
 			if body.Force {
-				sched.TriggerForAuthIDsForce(ctx, unique)
+				results = sched.TriggerForAuthIDsForce(ctx, unique)
 			} else {
-				sched.TriggerForAuthIDs(ctx, unique)
+				results = sched.TriggerForAuthIDs(ctx, unique)
+			}
+			now := time.Now()
+			for _, r := range results {
+				if r.Success {
+					if err := sched.RecordKeepaliveSentAt(r.AuthID, now); err != nil {
+						log.Warnf("keepalive: failed to record sent_at after async trigger: %v", err)
+					}
+				}
 			}
 		}()
 		c.JSON(http.StatusAccepted, gin.H{
