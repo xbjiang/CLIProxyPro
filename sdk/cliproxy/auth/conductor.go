@@ -2241,6 +2241,16 @@ func updateAggregatedAvailability(auth *Auth, now time.Time) {
 		clearAggregatedAvailability(auth)
 		return
 	}
+	// Account-level quota: if any model's quota is exceeded with a future
+	// recovery time, the entire account must be blocked regardless of other
+	// model states. Codex quotas are per-user, not per-model, so a
+	// usage_limit_reached on one model means all models are exhausted.
+	if quotaExceeded && !quotaRecover.IsZero() && quotaRecover.After(now) {
+		allUnavailable = true
+		if earliestRetry.IsZero() || quotaRecover.Before(earliestRetry) {
+			earliestRetry = quotaRecover
+		}
+	}
 	auth.Unavailable = allUnavailable
 	if allUnavailable {
 		auth.NextRetryAfter = earliestRetry

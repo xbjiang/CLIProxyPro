@@ -314,9 +314,11 @@ func (h *Handler) TriggerKeepalive(c *gin.Context) {
 		return
 	}
 
-	results := sched.TriggerForAuthIDs(c.Request.Context(), unique)
+	var results []keepalive.KeepaliveResult
 	if body.Force {
 		results = sched.TriggerForAuthIDsForce(c.Request.Context(), unique)
+	} else {
+		results = sched.TriggerForAuthIDs(c.Request.Context(), unique)
 	}
 
 	successCount := 0
