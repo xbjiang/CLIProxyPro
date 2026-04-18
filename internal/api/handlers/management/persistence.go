@@ -143,7 +143,10 @@ func (h *Handler) GetUsagePerAccountCycles(c *gin.Context) {
 		}
 	}
 
-	// Per email and window_type, keep the row with the highest total_tokens (ties broken by latest cycle_end).
+	// Per email and window_type, keep the row with the latest cycle_end (most recent cycle).
+	// We intentionally do NOT pick the row with the highest total_tokens: OpenAI has
+	// recently reduced free-account quotas, so the historical peak is no longer
+	// representative of what the account can deliver today.
 	type bestEntry struct {
 		row persistence.AccountCycleStat
 	}
@@ -154,8 +157,8 @@ func (h *Handler) GetUsagePerAccountCycles(c *gin.Context) {
 		}
 		key := row.Email + "|" + row.WindowType
 		cur, exists := byEmail[key]
-		if !exists || row.TotalTokens > cur.row.TotalTokens ||
-			(row.TotalTokens == cur.row.TotalTokens && row.CycleEnd > cur.row.CycleEnd) {
+		if !exists || row.CycleEnd > cur.row.CycleEnd ||
+			(row.CycleEnd == cur.row.CycleEnd && row.TotalTokens > cur.row.TotalTokens) {
 			byEmail[key] = bestEntry{row: row}
 		}
 	}
