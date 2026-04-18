@@ -253,15 +253,33 @@ func (s *authScheduler) pickSingle(ctx context.Context, provider, model string, 
 	if providerState == nil {
 		return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
+
+	// Pinned-auth fast path: when the caller explicitly selects an account
+	// (e.g. manual keepalive / force-probe), skip ready-bucket filtering and
+	// look up the auth directly. Keepalive and force-probe contexts
+	// additionally bypass the blocked-state check so the request always
+	// reaches upstream, mirroring the pinned branch in pickMixed.
+	if pinnedAuthID != "" {
+		if _, alreadyTried := tried[pinnedAuthID]; alreadyTried {
+			return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
+		}
+		meta := providerState.auths[pinnedAuthID]
+		if meta == nil || meta.auth == nil {
+			return nil, &Error{Code: "auth_not_found", Message: "pinned auth not found"}
+		}
+		blocked, _, _ := isAuthBlockedForModel(meta.auth, modelKey, time.Now())
+		if blocked && !kacontext.IsForceProbeContext(ctx) && !kacontext.IsKeepaliveContext(ctx) {
+			return nil, &Error{Code: "auth_unavailable", Message: "pinned auth is unavailable"}
+		}
+		return meta.auth, nil
+	}
+
 	shard := providerState.ensureModelLocked(modelKey, time.Now())
 	if shard == nil {
 		return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
 	predicate := func(entry *scheduledAuth) bool {
 		if entry == nil || entry.auth == nil {
-			return false
-		}
-		if pinnedAuthID != "" && entry.auth.ID != pinnedAuthID {
 			return false
 		}
 		if len(tried) > 0 {
