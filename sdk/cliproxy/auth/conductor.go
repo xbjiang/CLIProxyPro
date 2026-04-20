@@ -2690,7 +2690,7 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 		if _, used := tried[candidate.ID]; used {
 			continue
 		}
-		if modelKey != "" && !m.authSupportsRouteModel(registryRef, candidate, model) {
+		if pinnedAuthID == "" && modelKey != "" && !m.authSupportsRouteModel(registryRef, candidate, model) {
 			continue
 		}
 		candidates = append(candidates, candidate)
@@ -2834,7 +2834,7 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 		if _, ok := m.executors[providerKey]; !ok {
 			continue
 		}
-		if modelKey != "" && !m.authSupportsRouteModel(registryRef, candidate, model) {
+		if pinnedAuthID == "" && modelKey != "" && !m.authSupportsRouteModel(registryRef, candidate, model) {
 			continue
 		}
 		candidates = append(candidates, candidate)
