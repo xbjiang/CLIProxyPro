@@ -2002,6 +2002,16 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 			if result.Model != "" {
 				state := ensureModelState(auth, result.Model)
 				resetModelState(state, now)
+				// Keepalive success means the account's quota has recovered.
+				// Since Codex quotas are per-user (not per-model), clear all
+				// model states so the account becomes fully available again.
+				if kacontext.IsKeepaliveContext(ctx) {
+					for _, ms := range auth.ModelStates {
+						if ms != nil {
+							resetModelState(ms, now)
+						}
+					}
+				}
 				updateAggregatedAvailability(auth, now)
 				if !hasModelError(auth, now) {
 					auth.LastError = nil
@@ -2701,16 +2711,26 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 	}
 	// When a specific auth is pinned (global priority or metadata pin), bypass
 	// cooldown/availability checks so the request always reaches upstream.
-	var available []*Auth
+	// Return the pinned auth directly instead of passing through the selector,
+	// because built-in selectors re-filter by availability internally.
 	if pinnedAuthID != "" {
-		available = candidates
-	} else {
-		var errAvailable error
-		available, errAvailable = m.availableAuthsForRouteModel(candidates, provider, model, time.Now())
-		if errAvailable != nil {
-			m.mu.RUnlock()
-			return nil, nil, errAvailable
+		auth := candidates[0]
+		authCopy := auth.Clone()
+		m.mu.RUnlock()
+		if !auth.indexAssigned {
+			m.mu.Lock()
+			if current := m.auths[authCopy.ID]; current != nil && !current.indexAssigned {
+				current.EnsureIndex()
+				authCopy = current.Clone()
+			}
+			m.mu.Unlock()
 		}
+		return authCopy, executor, nil
+	}
+	available, errAvailable := m.availableAuthsForRouteModel(candidates, provider, model, time.Now())
+	if errAvailable != nil {
+		m.mu.RUnlock()
+		return nil, nil, errAvailable
 	}
 	selected, errPick := m.selector.Pick(ctx, provider, selectionArgForSelector(m.selector, model), opts, available)
 	if errPick != nil {
@@ -2845,16 +2865,32 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 	}
 	// When a specific auth is pinned (global priority or metadata pin), bypass
 	// cooldown/availability checks so the request always reaches upstream.
-	var available []*Auth
+	// Return the pinned auth directly instead of passing through the selector,
+	// because built-in selectors re-filter by availability internally.
 	if pinnedAuthID != "" {
-		available = candidates
-	} else {
-		var errAvailable error
-		available, errAvailable = m.availableAuthsForRouteModel(candidates, "mixed", model, time.Now())
-		if errAvailable != nil {
+		auth := candidates[0]
+		providerKey := strings.TrimSpace(strings.ToLower(auth.Provider))
+		exec, okExec := m.executors[providerKey]
+		if !okExec {
 			m.mu.RUnlock()
-			return nil, nil, "", errAvailable
+			return nil, nil, "", &Error{Code: "executor_not_found", Message: "executor not registered"}
 		}
+		authCopy := auth.Clone()
+		m.mu.RUnlock()
+		if !auth.indexAssigned {
+			m.mu.Lock()
+			if current := m.auths[authCopy.ID]; current != nil && !current.indexAssigned {
+				current.EnsureIndex()
+				authCopy = current.Clone()
+			}
+			m.mu.Unlock()
+		}
+		return authCopy, exec, providerKey, nil
+	}
+	available, errAvailable := m.availableAuthsForRouteModel(candidates, "mixed", model, time.Now())
+	if errAvailable != nil {
+		m.mu.RUnlock()
+		return nil, nil, "", errAvailable
 	}
 	selected, errPick := m.selector.Pick(ctx, "mixed", selectionArgForSelector(m.selector, model), opts, available)
 	if errPick != nil {
