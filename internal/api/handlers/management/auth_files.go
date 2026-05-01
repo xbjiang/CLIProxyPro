@@ -531,6 +531,13 @@ func extractCodexIDTokenClaims(auth *coreauth.Auth) gin.H {
 	if v := strings.TrimSpace(claims.CodexAuthInfo.ChatgptPlanType); v != "" {
 		result["plan_type"] = v
 	}
+	// Override plan_type if the conductor detected a downgrade (e.g. Plus→Free)
+	// from a 429 error response body and persisted it in Attributes["plan_type_override"].
+	if auth.Attributes != nil {
+		if override := strings.TrimSpace(auth.Attributes["plan_type_override"]); override != "" {
+			result["plan_type"] = override
+		}
+	}
 	if v := claims.CodexAuthInfo.ChatgptSubscriptionActiveStart; v != nil {
 		result["chatgpt_subscription_active_start"] = v
 	}

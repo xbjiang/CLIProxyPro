@@ -944,6 +944,10 @@ func (e statusErrWithHeaders) Headers() http.Header {
 	return e.headers.Clone()
 }
 
+func (e statusErrWithHeaders) ResponseHeaders() http.Header {
+	return e.Headers()
+}
+
 func parseCodexWebsocketError(payload []byte) (error, bool) {
 	if len(payload) == 0 {
 		return nil, false

@@ -882,6 +882,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 			}
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: rerr}
 			result.RetryAfter = retryAfterFromError(errStream)
+			result.RateLimit = rateLimitFromError(errStream)
 			m.MarkResult(ctx, result)
 			if isRequestInvalidError(errStream) {
 				return nil, errStream
@@ -1374,6 +1375,9 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 				}
 				if ra := retryAfterFromError(errExec); ra != nil {
 					result.RetryAfter = ra
+				}
+				if result.RateLimit == nil {
+					result.RateLimit = rateLimitFromError(errExec)
 				}
 				m.MarkResult(execCtx, result)
 				if isRequestInvalidError(errExec) {
@@ -2132,6 +2136,14 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 								shouldSuspendModel = true
 								setModelQuota = true
 							}
+							if result.Error != nil {
+								if pt := parsePlanTypeFromErrorBody(result.Error.Message); pt != "" {
+									if auth.Attributes == nil {
+										auth.Attributes = make(map[string]string)
+									}
+									auth.Attributes["plan_type_override"] = pt
+								}
+							}
 						case 408, 500, 502, 503, 504:
 							if disableCooling {
 								state.NextRetryAfter = time.Time{}
@@ -2402,6 +2414,20 @@ func retryAfterFromError(err error) *time.Duration {
 	return &value
 }
 
+func rateLimitFromError(err error) *RateLimitInfo {
+	if err == nil {
+		return nil
+	}
+	type responseHeadersProvider interface {
+		ResponseHeaders() http.Header
+	}
+	rhp, ok := err.(responseHeadersProvider)
+	if !ok || rhp == nil {
+		return nil
+	}
+	return ParseRateLimitHeaders(rhp.ResponseHeaders())
+}
+
 func statusCodeFromResult(err *Error) int {
 	if err == nil {
 		return 0
@@ -2550,6 +2576,12 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 		auth.StatusMessage = "quota exhausted"
 		auth.Quota.Exceeded = true
 		auth.Quota.Reason = "quota"
+		if pt := parsePlanTypeFromErrorBody(resultErr.Message); pt != "" {
+			if auth.Attributes == nil {
+				auth.Attributes = make(map[string]string)
+			}
+			auth.Attributes["plan_type_override"] = pt
+		}
 		var next time.Time
 		if !disableCooling {
 			if retryAfter != nil {
@@ -2594,6 +2626,25 @@ func nextQuotaCooldown(prevLevel int, disableCooling bool) (time.Duration, int) 
 		return quotaBackoffMax, prevLevel
 	}
 	return cooldown, prevLevel + 1
+}
+
+// parsePlanTypeFromErrorBody extracts the plan_type from an upstream error
+// response JSON body. The Codex API returns a body like:
+//   {"error":{"type":"usage_limit_reached","plan_type":"free","resets_at":...}}
+// When plan_type is present it overrides the cached id_token plan_type.
+func parsePlanTypeFromErrorBody(msg string) string {
+	if msg == "" {
+		return ""
+	}
+	var outer struct {
+		Error struct {
+			PlanType string `json:"plan_type"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(msg), &outer); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(strings.ToLower(outer.Error.PlanType))
 }
 
 // List returns all auth entries currently known by the manager.

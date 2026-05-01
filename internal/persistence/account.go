@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -23,6 +24,7 @@ type AccountStateRow struct {
 	UpdatedAt           time.Time
 	LastKeepaliveSentAt *time.Time // nil = never sent
 	RateLimit           *coreauth.RateLimitInfo
+	PlanTypeOverride    string     // non-empty when conductor detected a downgrade (e.g. Plus→Free)
 }
 
 // UpsertAccountStates writes the given auth entries, applying the CASE logic for
@@ -59,8 +61,9 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 			(auth_index, auth_id, email, name, label, unavailable, disabled,
 			 next_retry_after, quota_backoff_lvl, status, status_message, updated_at,
 			 rl_limit_requests, rl_remaining_requests, rl_reset_requests,
-			 rl_limit_tokens, rl_remaining_tokens, rl_reset_tokens, rl_updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			 rl_limit_tokens, rl_remaining_tokens, rl_reset_tokens, rl_updated_at,
+			 plan_type_override)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(auth_index) DO UPDATE SET
 			auth_id          = excluded.auth_id,
 			email            = excluded.email,
@@ -124,6 +127,10 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 				WHEN account_states.rl_reset_requests IS NOT NULL
 				     AND datetime(account_states.rl_reset_requests) > datetime('now') THEN account_states.rl_updated_at
 				ELSE excluded.rl_updated_at
+			END,
+			plan_type_override = CASE
+				WHEN excluded.plan_type_override IS NOT NULL AND excluded.plan_type_override != '' THEN excluded.plan_type_override
+				ELSE account_states.plan_type_override
 			END
 	`)
 	if err != nil {
@@ -187,6 +194,7 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 			now,
 			rlLimitReq, rlRemainReq, rlResetReq,
 			rlLimitTok, rlRemainTok, rlResetTok, rlUpdatedAt,
+				planTypeOverride(a),
 		); err != nil {
 			return err
 		}
@@ -246,6 +254,18 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 	return tx.Commit()
 }
 
+// planTypeOverride returns the plan_type override from Attributes, or nil if none.
+// The conductor sets Attributes["plan_type_override"] when it detects a downgrade
+// (e.g. Plus→Free) from a 429 error response body.
+func planTypeOverride(a *coreauth.Auth) *string {
+	if a.Attributes != nil {
+		if pt := strings.TrimSpace(a.Attributes["plan_type_override"]); pt != "" {
+			return &pt
+		}
+	}
+	return nil
+}
+
 // LoadAccountStates returns all stored account states keyed by auth_index.
 func LoadAccountStates(db *sql.DB) (map[string]*AccountStateRow, error) {
 	rows, err := db.Query(`
@@ -254,7 +274,8 @@ func LoadAccountStates(db *sql.DB) (map[string]*AccountStateRow, error) {
 		       quota_backoff_lvl, COALESCE(status,'unknown'), COALESCE(status_message,''),
 		       updated_at, last_keepalive_sent_at,
 		       COALESCE(rl_limit_requests,0), COALESCE(rl_remaining_requests,0), rl_reset_requests,
-		       COALESCE(rl_limit_tokens,0), COALESCE(rl_remaining_tokens,0), rl_reset_tokens, rl_updated_at
+		       COALESCE(rl_limit_tokens,0), COALESCE(rl_remaining_tokens,0), rl_reset_tokens, rl_updated_at,
+		       COALESCE(plan_type_override,'')
 		FROM account_states`)
 	if err != nil {
 		return nil, err
@@ -269,6 +290,7 @@ func LoadAccountStates(db *sql.DB) (map[string]*AccountStateRow, error) {
 		var lksa sql.NullString
 		var rlLimitReq, rlRemainReq, rlLimitTok, rlRemainTok int
 		var rlResetReq, rlResetTok, rlUpdatedAt sql.NullString
+		var planTypeOverride string
 		if err := rows.Scan(
 			&r.AuthIndex, &r.AuthID, &r.Email, &r.Name, &r.Label,
 			&r.Unavailable, &r.Disabled, &nra,
@@ -276,9 +298,11 @@ func LoadAccountStates(db *sql.DB) (map[string]*AccountStateRow, error) {
 			&updStr, &lksa,
 			&rlLimitReq, &rlRemainReq, &rlResetReq,
 			&rlLimitTok, &rlRemainTok, &rlResetTok, &rlUpdatedAt,
+			&planTypeOverride,
 		); err != nil {
 			return nil, err
 		}
+		r.PlanTypeOverride = planTypeOverride
 		if nra.Valid && nra.String != "" {
 			if t, err := time.Parse(time.RFC3339, nra.String); err == nil {
 				r.NextRetryAfter = &t

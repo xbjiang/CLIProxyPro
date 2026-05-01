@@ -153,5 +153,18 @@ CREATE INDEX IF NOT EXISTS idx_arh_auth_index ON account_reset_history(auth_inde
 		  AND rl_limit_requests = 100 AND rl_limit_tokens = 100
 	`)
 
+	// Migration: add plan_type_override column to account_states.
+	// When the conductor detects a plan downgrade (Plus→Free) from a 429 error body,
+	// it updates Attributes["plan_type"]. This column persists that override across restarts.
+	var ptOverrideExists bool
+	if qErr := db.QueryRow(`
+		SELECT COUNT(*) > 0 FROM pragma_table_info('account_states')
+		WHERE name = 'plan_type_override'
+	`).Scan(&ptOverrideExists); qErr == nil && !ptOverrideExists {
+		if _, aErr := db.Exec(`ALTER TABLE account_states ADD COLUMN plan_type_override TEXT`); aErr != nil {
+			return fmt.Errorf("persistence: add plan_type_override column: %w", aErr)
+		}
+	}
+
 	return nil
 }

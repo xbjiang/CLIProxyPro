@@ -191,6 +191,18 @@ func restoreAccountStates(db *sql.DB, mgr *coreauth.Manager) {
 			}
 		}
 
+		// Restore plan_type_override from persistence (e.g. Plus→Free downgrade detected
+		// by the conductor from a 429 error response body).
+		if state.PlanTypeOverride != "" {
+			if authCopy.Attributes == nil {
+				authCopy.Attributes = make(map[string]string)
+			}
+			if authCopy.Attributes["plan_type_override"] != state.PlanTypeOverride {
+				authCopy.Attributes["plan_type_override"] = state.PlanTypeOverride
+				needUpdate = true
+			}
+		}
+
 		if !needUpdate {
 			continue
 		}
