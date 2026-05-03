@@ -1171,6 +1171,22 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 				auth.ModelStates = existing.ModelStates
 			}
 		}
+		// Preserve runtime quota/availability state from existing when the incoming
+		// auth carries stale or empty values. This prevents concurrent operations
+		// (e.g. token refresh) from overwriting a freshly set NextRetryAfter.
+		if auth.NextRetryAfter.IsZero() && !existing.NextRetryAfter.IsZero() {
+			auth.NextRetryAfter = existing.NextRetryAfter
+			auth.Unavailable = existing.Unavailable
+			auth.Quota = existing.Quota
+		} else if !auth.NextRetryAfter.IsZero() && !existing.NextRetryAfter.IsZero() &&
+			existing.NextRetryAfter.After(auth.NextRetryAfter) {
+			auth.NextRetryAfter = existing.NextRetryAfter
+			auth.Unavailable = existing.Unavailable
+			auth.Quota = existing.Quota
+		}
+		if auth.RateLimit == nil && existing.RateLimit != nil {
+			auth.RateLimit = existing.RateLimit
+		}
 	}
 	auth.EnsureIndex()
 	authClone := auth.Clone()
