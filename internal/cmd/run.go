@@ -118,9 +118,9 @@ func StartService(cfg *config.Config, configPath string, localPassword string) {
 				go capturedSched.StartWithCompensation(context.Background())
 			}
 
-			// Start cleanup task (daily, 30-day retention)
+			// Start cleanup task (daily, 180-day retention)
 			if capturedDB != nil {
-				persistence.StartCleanupTask(capturedDB, 30*24*time.Hour)
+				persistence.StartCleanupTask(capturedDB, 180*24*time.Hour)
 			}
 
 			log.Info("persistence: keepalive and persistence initialised")
