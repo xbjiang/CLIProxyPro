@@ -62,8 +62,9 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 			 next_retry_after, quota_backoff_lvl, status, status_message, updated_at,
 			 rl_limit_requests, rl_remaining_requests, rl_reset_requests,
 			 rl_limit_tokens, rl_remaining_tokens, rl_reset_tokens, rl_updated_at,
+			 rl_primary_window_minutes, rl_secondary_window_minutes,
 			 plan_type_override)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(auth_index) DO UPDATE SET
 			auth_id          = excluded.auth_id,
 			email            = excluded.email,
@@ -128,6 +129,14 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 				     AND datetime(account_states.rl_reset_requests) > datetime('now') THEN account_states.rl_updated_at
 				ELSE excluded.rl_updated_at
 			END,
+			rl_primary_window_minutes = CASE
+				WHEN excluded.rl_primary_window_minutes > 0 THEN excluded.rl_primary_window_minutes
+				ELSE account_states.rl_primary_window_minutes
+			END,
+			rl_secondary_window_minutes = CASE
+				WHEN excluded.rl_secondary_window_minutes > 0 THEN excluded.rl_secondary_window_minutes
+				ELSE account_states.rl_secondary_window_minutes
+			END,
 			plan_type_override = CASE
 				WHEN excluded.plan_type_override IS NOT NULL AND excluded.plan_type_override != '' THEN excluded.plan_type_override
 				ELSE account_states.plan_type_override
@@ -168,11 +177,14 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 		}
 		var rlLimitReq, rlRemainReq, rlLimitTok, rlRemainTok int
 		var rlResetReq, rlResetTok, rlUpdatedAt *string
+		var rlPrimaryWinMin, rlSecondaryWinMin int
 		if a.RateLimit != nil {
 			rlLimitReq = a.RateLimit.LimitRequests
 			rlRemainReq = a.RateLimit.RemainingRequests
 			rlLimitTok = a.RateLimit.LimitTokens
 			rlRemainTok = a.RateLimit.RemainingTokens
+			rlPrimaryWinMin = a.RateLimit.PrimaryWindowMinutes
+			rlSecondaryWinMin = a.RateLimit.SecondaryWindowMinutes
 			if !a.RateLimit.ResetRequests.IsZero() {
 				s := a.RateLimit.ResetRequests.UTC().Format(time.RFC3339)
 				rlResetReq = &s
@@ -194,6 +206,7 @@ func UpsertAccountStates(db *sql.DB, auths []*coreauth.Auth) error {
 			now,
 			rlLimitReq, rlRemainReq, rlResetReq,
 			rlLimitTok, rlRemainTok, rlResetTok, rlUpdatedAt,
+			rlPrimaryWinMin, rlSecondaryWinMin,
 				planTypeOverride(a),
 		); err != nil {
 			return err
@@ -275,6 +288,7 @@ func LoadAccountStates(db *sql.DB) (map[string]*AccountStateRow, error) {
 		       updated_at, last_keepalive_sent_at,
 		       COALESCE(rl_limit_requests,0), COALESCE(rl_remaining_requests,0), rl_reset_requests,
 		       COALESCE(rl_limit_tokens,0), COALESCE(rl_remaining_tokens,0), rl_reset_tokens, rl_updated_at,
+		       COALESCE(rl_primary_window_minutes,0), COALESCE(rl_secondary_window_minutes,0),
 		       COALESCE(plan_type_override,'')
 		FROM account_states`)
 	if err != nil {
@@ -289,6 +303,7 @@ func LoadAccountStates(db *sql.DB) (map[string]*AccountStateRow, error) {
 		var updStr string
 		var lksa sql.NullString
 		var rlLimitReq, rlRemainReq, rlLimitTok, rlRemainTok int
+		var rlPrimaryWinMin, rlSecondaryWinMin int
 		var rlResetReq, rlResetTok, rlUpdatedAt sql.NullString
 		var planTypeOverride string
 		if err := rows.Scan(
@@ -298,6 +313,7 @@ func LoadAccountStates(db *sql.DB) (map[string]*AccountStateRow, error) {
 			&updStr, &lksa,
 			&rlLimitReq, &rlRemainReq, &rlResetReq,
 			&rlLimitTok, &rlRemainTok, &rlResetTok, &rlUpdatedAt,
+			&rlPrimaryWinMin, &rlSecondaryWinMin,
 			&planTypeOverride,
 		); err != nil {
 			return nil, err
@@ -318,10 +334,12 @@ func LoadAccountStates(db *sql.DB) (map[string]*AccountStateRow, error) {
 		if rlLimitReq > 0 || rlRemainReq > 0 || rlLimitTok > 0 || rlRemainTok > 0 ||
 			rlResetReq.Valid || rlResetTok.Valid || rlUpdatedAt.Valid {
 			rl := &coreauth.RateLimitInfo{
-				LimitRequests:     rlLimitReq,
-				RemainingRequests: rlRemainReq,
-				LimitTokens:       rlLimitTok,
-				RemainingTokens:   rlRemainTok,
+				LimitRequests:          rlLimitReq,
+				RemainingRequests:      rlRemainReq,
+				LimitTokens:            rlLimitTok,
+				RemainingTokens:        rlRemainTok,
+				PrimaryWindowMinutes:   rlPrimaryWinMin,
+				SecondaryWindowMinutes: rlSecondaryWinMin,
 			}
 			if rlResetReq.Valid && rlResetReq.String != "" {
 				if t, err := time.Parse(time.RFC3339, rlResetReq.String); err == nil {

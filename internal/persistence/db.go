@@ -166,5 +166,15 @@ CREATE INDEX IF NOT EXISTS idx_arh_auth_index ON account_reset_history(auth_inde
 		}
 	}
 
+	// Migration: add window minutes columns to account_states.
+	var rlPrimaryWinExists bool
+	if qErr := db.QueryRow(`
+		SELECT COUNT(*) > 0 FROM pragma_table_info('account_states')
+		WHERE name = 'rl_primary_window_minutes'
+	`).Scan(&rlPrimaryWinExists); qErr == nil && !rlPrimaryWinExists {
+		db.Exec(`ALTER TABLE account_states ADD COLUMN rl_primary_window_minutes INTEGER DEFAULT 0`)
+		db.Exec(`ALTER TABLE account_states ADD COLUMN rl_secondary_window_minutes INTEGER DEFAULT 0`)
+	}
+
 	return nil
 }

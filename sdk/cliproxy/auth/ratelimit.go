@@ -3,6 +3,7 @@ package auth
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -115,6 +116,17 @@ func parseCodexRateLimitHeaders(h http.Header) *RateLimitInfo {
 		rl.ResetTokens = time.Unix(v, 0)
 	} else if v, err := strconv.Atoi(secondaryResetAfter); err == nil && v > 0 {
 		rl.ResetTokens = now.Add(time.Duration(v) * time.Second)
+	}
+
+	// Plan type and window durations
+	if pt := strings.TrimSpace(h.Get("X-Codex-Plan-Type")); pt != "" {
+		rl.PlanType = strings.ToLower(pt)
+	}
+	if v, err := strconv.Atoi(h.Get("X-Codex-Primary-Window-Minutes")); err == nil && v > 0 {
+		rl.PrimaryWindowMinutes = v
+	}
+	if v, err := strconv.Atoi(h.Get("X-Codex-Secondary-Window-Minutes")); err == nil && v > 0 {
+		rl.SecondaryWindowMinutes = v
 	}
 
 	return rl

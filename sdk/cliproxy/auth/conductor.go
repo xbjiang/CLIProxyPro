@@ -2183,6 +2183,12 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 
 		if result.RateLimit != nil {
 			auth.RateLimit = result.RateLimit
+			if result.RateLimit.PlanType != "" {
+				if auth.Attributes == nil {
+					auth.Attributes = make(map[string]string)
+				}
+				auth.Attributes["plan_type_override"] = result.RateLimit.PlanType
+			}
 		} else if result.Success && auth.RateLimit != nil {
 			rl := auth.RateLimit
 			reqStale := rl.ResetRequests.IsZero() || !rl.ResetRequests.After(now)

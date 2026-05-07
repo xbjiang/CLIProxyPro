@@ -111,13 +111,16 @@ type QuotaState struct {
 
 // RateLimitInfo captures the rate limit headers returned by the upstream provider.
 type RateLimitInfo struct {
-	LimitRequests     int       `json:"limit_requests"`
-	RemainingRequests int       `json:"remaining_requests"`
-	ResetRequests     time.Time `json:"reset_requests"`
-	LimitTokens       int       `json:"limit_tokens"`
-	RemainingTokens   int       `json:"remaining_tokens"`
-	ResetTokens       time.Time `json:"reset_tokens"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	LimitRequests          int       `json:"limit_requests"`
+	RemainingRequests      int       `json:"remaining_requests"`
+	ResetRequests          time.Time `json:"reset_requests"`
+	LimitTokens            int       `json:"limit_tokens"`
+	RemainingTokens        int       `json:"remaining_tokens"`
+	ResetTokens            time.Time `json:"reset_tokens"`
+	UpdatedAt              time.Time `json:"updated_at"`
+	PlanType               string    `json:"plan_type,omitempty"`
+	PrimaryWindowMinutes   int       `json:"primary_window_minutes,omitempty"`
+	SecondaryWindowMinutes int       `json:"secondary_window_minutes,omitempty"`
 }
 
 // ModelState captures the execution state for a specific model under an auth entry.
