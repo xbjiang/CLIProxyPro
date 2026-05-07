@@ -1187,6 +1187,20 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 		if auth.RateLimit == nil && existing.RateLimit != nil {
 			auth.RateLimit = existing.RateLimit
 		}
+		// Preserve runtime-injected plan_type_override from existing Attributes.
+		// This value is set by the conductor when detecting plan changes from response
+		// headers and is not persisted in the auth file on disk, so file watcher reloads
+		// or token refreshes would otherwise lose it.
+		if existing.Attributes != nil {
+			if pt := existing.Attributes["plan_type_override"]; pt != "" {
+				if auth.Attributes == nil || auth.Attributes["plan_type_override"] == "" {
+					if auth.Attributes == nil {
+						auth.Attributes = make(map[string]string)
+					}
+					auth.Attributes["plan_type_override"] = pt
+				}
+			}
+		}
 	}
 	auth.EnsureIndex()
 	authClone := auth.Clone()
