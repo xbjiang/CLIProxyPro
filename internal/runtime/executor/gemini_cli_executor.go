@@ -221,6 +221,7 @@ func (e *GeminiCLIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 			log.Errorf("gemini cli executor: close response body error: %v", errClose)
 		}
 		helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+		reporter.SetStatusCode(httpResp.StatusCode)
 		if errRead != nil {
 			helps.RecordAPIResponseError(ctx, e.cfg, errRead)
 			err = errRead
@@ -247,6 +248,8 @@ func (e *GeminiCLIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 			continue
 		}
 
+		errMsg := helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), data)
+		reporter.PublishFailure(ctx, httpResp.StatusCode, errMsg)
 		err = newGeminiStatusErr(httpResp.StatusCode, data)
 		return resp, err
 	}
@@ -257,6 +260,8 @@ func (e *GeminiCLIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 	if lastStatus == 0 {
 		lastStatus = 429
 	}
+	errMsg := helps.SummarizeErrorBody("", lastBody)
+	reporter.PublishFailure(ctx, lastStatus, errMsg)
 	err = newGeminiStatusErr(lastStatus, lastBody)
 	return resp, err
 }
@@ -384,6 +389,8 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 				}
 				continue
 			}
+			errMsg := helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), data)
+			reporter.PublishFailure(ctx, httpResp.StatusCode, errMsg)
 			err = newGeminiStatusErr(httpResp.StatusCode, data)
 			return nil, err
 		}
@@ -420,7 +427,7 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 				}
 				if errScan := scanner.Err(); errScan != nil {
 					helps.RecordAPIResponseError(ctx, e.cfg, errScan)
-					reporter.PublishFailure(ctx)
+					reporter.PublishFailure(ctx, 0, errScan.Error())
 					out <- cliproxyexecutor.StreamChunk{Err: errScan}
 				}
 				return
@@ -429,7 +436,7 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 			data, errRead := io.ReadAll(resp.Body)
 			if errRead != nil {
 				helps.RecordAPIResponseError(ctx, e.cfg, errRead)
-				reporter.PublishFailure(ctx)
+				reporter.PublishFailure(ctx, 0, errRead.Error())
 				out <- cliproxyexecutor.StreamChunk{Err: errRead}
 				return
 			}
@@ -456,6 +463,8 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 	if lastStatus == 0 {
 		lastStatus = 429
 	}
+	errMsg2 := helps.SummarizeErrorBody("", lastBody)
+	reporter.PublishFailure(ctx, lastStatus, errMsg2)
 	err = newGeminiStatusErr(lastStatus, lastBody)
 	return nil, err
 }

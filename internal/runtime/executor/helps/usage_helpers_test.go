@@ -54,11 +54,27 @@ func TestUsageReporterBuildRecordIncludesLatency(t *testing.T) {
 		requestedAt: time.Now().Add(-1500 * time.Millisecond),
 	}
 
-	record := reporter.buildRecord(usage.Detail{TotalTokens: 3}, false)
+	record := reporter.buildRecord(usage.Detail{TotalTokens: 3}, false, 200, "")
 	if record.Latency < time.Second {
 		t.Fatalf("latency = %v, want >= 1s", record.Latency)
 	}
 	if record.Latency > 3*time.Second {
 		t.Fatalf("latency = %v, want <= 3s", record.Latency)
+	}
+}
+
+func TestUsageReporterBuildRecordIncludesStatusAndError(t *testing.T) {
+	reporter := &UsageReporter{
+		provider:    "openai",
+		model:       "gpt-5.4",
+		requestedAt: time.Now(),
+	}
+
+	record := reporter.buildRecord(usage.Detail{}, true, 429, "Too Many Requests")
+	if record.StatusCode != 429 {
+		t.Errorf("status code = %d, want 429", record.StatusCode)
+	}
+	if record.ErrorMessage != "Too Many Requests" {
+		t.Errorf("error message = %q, want 'Too Many Requests'", record.ErrorMessage)
 	}
 }

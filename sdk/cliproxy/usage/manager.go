@@ -20,6 +20,8 @@ type Record struct {
 	Latency     time.Duration
 	Failed      bool
 	Detail      Detail
+	StatusCode   int
+	ErrorMessage string
 }
 
 // Detail holds the token usage breakdown.

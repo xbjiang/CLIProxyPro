@@ -568,6 +568,7 @@ attemptLoop:
 			}
 
 			helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+			reporter.SetStatusCode(httpResp.StatusCode)
 			bodyBytes, errRead := io.ReadAll(httpResp.Body)
 			if errClose := httpResp.Body.Close(); errClose != nil {
 				log.Errorf("antigravity executor: close response body error: %v", errClose)
@@ -647,6 +648,7 @@ attemptLoop:
 						continue attemptLoop
 					}
 				}
+				reporter.PublishFailure(ctx, httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), bodyBytes))
 				err = newAntigravityStatusErr(httpResp.StatusCode, bodyBytes)
 				return resp, err
 			}
@@ -665,6 +667,7 @@ attemptLoop:
 
 		switch {
 		case lastStatus != 0:
+			reporter.PublishFailure(ctx, lastStatus, helps.SummarizeErrorBody("", lastBody))
 			err = newAntigravityStatusErr(lastStatus, lastBody)
 		case lastErr != nil:
 			err = lastErr
@@ -764,6 +767,7 @@ attemptLoop:
 				return resp, err
 			}
 			helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+			reporter.SetStatusCode(httpResp.StatusCode)
 			if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
 				bodyBytes, errRead := io.ReadAll(httpResp.Body)
 				if errClose := httpResp.Body.Close(); errClose != nil {
@@ -857,6 +861,7 @@ attemptLoop:
 						continue attemptLoop
 					}
 				}
+				reporter.PublishFailure(ctx, httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), bodyBytes))
 				err = newAntigravityStatusErr(httpResp.StatusCode, bodyBytes)
 				return resp, err
 			}
@@ -896,7 +901,7 @@ attemptLoop:
 				}
 				if errScan := scanner.Err(); errScan != nil {
 					helps.RecordAPIResponseError(ctx, e.cfg, errScan)
-					reporter.PublishFailure(ctx)
+					reporter.PublishFailure(ctx, 0, errScan.Error())
 					out <- cliproxyexecutor.StreamChunk{Err: errScan}
 				} else {
 					reporter.EnsurePublished(ctx)
@@ -926,6 +931,7 @@ attemptLoop:
 
 		switch {
 		case lastStatus != 0:
+			reporter.PublishFailure(ctx, lastStatus, helps.SummarizeErrorBody("", lastBody))
 			err = newAntigravityStatusErr(lastStatus, lastBody)
 		case lastErr != nil:
 			err = lastErr
@@ -1223,6 +1229,7 @@ attemptLoop:
 				return nil, err
 			}
 			helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+			reporter.SetStatusCode(httpResp.StatusCode)
 			if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
 				bodyBytes, errRead := io.ReadAll(httpResp.Body)
 				if errClose := httpResp.Body.Close(); errClose != nil {
@@ -1316,6 +1323,7 @@ attemptLoop:
 						continue attemptLoop
 					}
 				}
+				reporter.PublishFailure(ctx, httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), bodyBytes))
 				err = newAntigravityStatusErr(httpResp.StatusCode, bodyBytes)
 				return nil, err
 			}
@@ -1363,7 +1371,7 @@ attemptLoop:
 				}
 				if errScan := scanner.Err(); errScan != nil {
 					helps.RecordAPIResponseError(ctx, e.cfg, errScan)
-					reporter.PublishFailure(ctx)
+					reporter.PublishFailure(ctx, 0, errScan.Error())
 					out <- cliproxyexecutor.StreamChunk{Err: errScan}
 				} else {
 					reporter.EnsurePublished(ctx)
@@ -1374,6 +1382,7 @@ attemptLoop:
 
 		switch {
 		case lastStatus != 0:
+			reporter.PublishFailure(ctx, lastStatus, helps.SummarizeErrorBody("", lastBody))
 			err = newAntigravityStatusErr(lastStatus, lastBody)
 		case lastErr != nil:
 			err = lastErr

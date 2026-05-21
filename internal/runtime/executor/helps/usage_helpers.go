@@ -16,14 +16,16 @@ import (
 )
 
 type UsageReporter struct {
-	provider    string
-	model       string
-	authID      string
-	authIndex   string
-	apiKey      string
-	source      string
-	requestedAt time.Time
-	once        sync.Once
+	provider     string
+	model        string
+	authID       string
+	authIndex    string
+	apiKey       string
+	source       string
+	requestedAt  time.Time
+	once         sync.Once
+	statusCode   int
+	errorMessage string
 }
 
 func NewUsageReporter(ctx context.Context, provider, model string, auth *cliproxyauth.Auth) *UsageReporter {
@@ -42,12 +44,22 @@ func NewUsageReporter(ctx context.Context, provider, model string, auth *cliprox
 	return reporter
 }
 
-func (r *UsageReporter) Publish(ctx context.Context, detail usage.Detail) {
-	r.publishWithOutcome(ctx, detail, false)
+func (r *UsageReporter) SetStatusCode(code int) {
+	if r == nil {
+		return
+	}
+	r.statusCode = code
 }
 
-func (r *UsageReporter) PublishFailure(ctx context.Context) {
-	r.publishWithOutcome(ctx, usage.Detail{}, true)
+func (r *UsageReporter) Publish(ctx context.Context, detail usage.Detail) {
+	r.publishWithOutcome(ctx, detail, false, r.statusCode, "")
+}
+
+func (r *UsageReporter) PublishFailure(ctx context.Context, statusCode int, errorMessage string) {
+	if len(errorMessage) > 500 {
+		errorMessage = errorMessage[:500]
+	}
+	r.publishWithOutcome(ctx, usage.Detail{}, true, statusCode, errorMessage)
 }
 
 func (r *UsageReporter) TrackFailure(ctx context.Context, errPtr *error) {
@@ -55,11 +67,11 @@ func (r *UsageReporter) TrackFailure(ctx context.Context, errPtr *error) {
 		return
 	}
 	if *errPtr != nil {
-		r.PublishFailure(ctx)
+		r.PublishFailure(ctx, r.statusCode, (*errPtr).Error())
 	}
 }
 
-func (r *UsageReporter) publishWithOutcome(ctx context.Context, detail usage.Detail, failed bool) {
+func (r *UsageReporter) publishWithOutcome(ctx context.Context, detail usage.Detail, failed bool, statusCode int, errorMessage string) {
 	if r == nil {
 		return
 	}
@@ -70,7 +82,7 @@ func (r *UsageReporter) publishWithOutcome(ctx context.Context, detail usage.Det
 		}
 	}
 	r.once.Do(func() {
-		usage.PublishRecord(ctx, r.buildRecord(detail, failed))
+		usage.PublishRecord(ctx, r.buildRecord(detail, failed, statusCode, errorMessage))
 	})
 }
 
@@ -83,25 +95,27 @@ func (r *UsageReporter) EnsurePublished(ctx context.Context) {
 		return
 	}
 	r.once.Do(func() {
-		usage.PublishRecord(ctx, r.buildRecord(usage.Detail{}, false))
+		usage.PublishRecord(ctx, r.buildRecord(usage.Detail{}, false, r.statusCode, ""))
 	})
 }
 
-func (r *UsageReporter) buildRecord(detail usage.Detail, failed bool) usage.Record {
+func (r *UsageReporter) buildRecord(detail usage.Detail, failed bool, statusCode int, errorMessage string) usage.Record {
 	if r == nil {
-		return usage.Record{Detail: detail, Failed: failed}
+		return usage.Record{Detail: detail, Failed: failed, StatusCode: statusCode, ErrorMessage: errorMessage}
 	}
 	return usage.Record{
-		Provider:    r.provider,
-		Model:       r.model,
-		Source:      r.source,
-		APIKey:      r.apiKey,
-		AuthID:      r.authID,
-		AuthIndex:   r.authIndex,
-		RequestedAt: r.requestedAt,
-		Latency:     r.latency(),
-		Failed:      failed,
-		Detail:      detail,
+		Provider:     r.provider,
+		Model:        r.model,
+		Source:       r.source,
+		APIKey:       r.apiKey,
+		AuthID:       r.authID,
+		AuthIndex:    r.authIndex,
+		RequestedAt:  r.requestedAt,
+		Latency:      r.latency(),
+		Failed:       failed,
+		Detail:       detail,
+		StatusCode:   statusCode,
+		ErrorMessage: errorMessage,
 	}
 }
 

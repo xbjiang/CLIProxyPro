@@ -25,8 +25,9 @@ func InsertUsageRecord(db *sql.DB, hash string, rec coreusage.Record, isKeepaliv
 	_, err := db.Exec(`
 		INSERT OR IGNORE INTO usage_records
 			(dedup_hash, api_key, model, timestamp, source, auth_index, auth_id, provider,
-			 input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens, failed, is_keepalive)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			 input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens, failed, is_keepalive,
+			 status_code, error_message)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		hash,
 		rec.APIKey,
 		rec.Model,
@@ -42,6 +43,8 @@ func InsertUsageRecord(db *sql.DB, hash string, rec coreusage.Record, isKeepaliv
 		rec.Detail.TotalTokens,
 		fv,
 		kv,
+		rec.StatusCode,
+		rec.ErrorMessage,
 	)
 	return err
 }
@@ -232,6 +235,8 @@ type UsageRecord struct {
 	ReasoningTokens int64  `json:"reasoning_tokens"`
 	CachedTokens    int64  `json:"cached_tokens"`
 	TotalTokens     int64  `json:"total_tokens"`
+	StatusCode      int    `json:"status_code"`
+	ErrorMessage    string `json:"error_message,omitempty"`
 }
 
 // AccountCycleStat represents per-account usage within its current quota cycle.
@@ -547,7 +552,8 @@ func QueryByDateRange(ctx context.Context, db *sql.DB, startDate, endDate string
 	// Detailed logs (ordered by timestamp desc, limit 1000)
 	rows3, err := db.QueryContext(ctx, `
 		SELECT timestamp, COALESCE(source,''), model, failed, is_keepalive,
-			   input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens
+			   input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens,
+			   status_code, error_message
 		FROM usage_records
 		WHERE DATE(timestamp, 'localtime') >= ? AND DATE(timestamp, 'localtime') <= ?
 		ORDER BY timestamp DESC LIMIT 1000`,
@@ -562,7 +568,8 @@ func QueryByDateRange(ctx context.Context, db *sql.DB, startDate, endDate string
 		var rec UsageRecord
 		var failedInt, keepaliveInt int
 		if err := rows3.Scan(&rec.Timestamp, &rec.Source, &rec.Model, &failedInt, &keepaliveInt,
-			&rec.InputTokens, &rec.OutputTokens, &rec.ReasoningTokens, &rec.CachedTokens, &rec.TotalTokens); err != nil {
+			&rec.InputTokens, &rec.OutputTokens, &rec.ReasoningTokens, &rec.CachedTokens, &rec.TotalTokens,
+			&rec.StatusCode, &rec.ErrorMessage); err != nil {
 			return nil, nil, err
 		}
 		rec.Failed = failedInt == 1

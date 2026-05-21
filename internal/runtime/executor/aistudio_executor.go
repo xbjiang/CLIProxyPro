@@ -173,10 +173,12 @@ func (e *AIStudioExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth,
 		return resp, err
 	}
 	helps.RecordAPIResponseMetadata(ctx, e.cfg, wsResp.Status, wsResp.Headers.Clone())
+	reporter.SetStatusCode(wsResp.Status)
 	if len(wsResp.Body) > 0 {
 		helps.AppendAPIResponseChunk(ctx, e.cfg, wsResp.Body)
 	}
 	if wsResp.Status < 200 || wsResp.Status >= 300 {
+		reporter.PublishFailure(ctx, wsResp.Status, helps.SummarizeErrorBody(wsResp.Headers.Get("Content-Type"), wsResp.Body))
 		return resp, statusErr{code: wsResp.Status, msg: string(wsResp.Body)}
 	}
 	reporter.Publish(ctx, helps.ParseGeminiUsage(wsResp.Body))
@@ -245,6 +247,7 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 		if firstEvent.Status > 0 {
 			helps.RecordAPIResponseMetadata(ctx, e.cfg, firstEvent.Status, firstEvent.Headers.Clone())
 			metadataLogged = true
+			reporter.SetStatusCode(firstEvent.Status)
 		}
 		var body bytes.Buffer
 		if len(firstEvent.Payload) > 0 {
@@ -252,6 +255,7 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 			body.Write(firstEvent.Payload)
 		}
 		if firstEvent.Type == wsrelay.MessageTypeStreamEnd {
+			reporter.PublishFailure(ctx, firstEvent.Status, helps.SummarizeErrorBody(firstEvent.Headers.Get("Content-Type"), body.Bytes()))
 			return nil, statusErr{code: firstEvent.Status, msg: body.String()}
 		}
 		for event := range wsStream {
@@ -265,6 +269,7 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 			if !metadataLogged && event.Status > 0 {
 				helps.RecordAPIResponseMetadata(ctx, e.cfg, event.Status, event.Headers.Clone())
 				metadataLogged = true
+				reporter.SetStatusCode(event.Status)
 			}
 			if len(event.Payload) > 0 {
 				helps.AppendAPIResponseChunk(ctx, e.cfg, event.Payload)
@@ -274,6 +279,7 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 				break
 			}
 		}
+		reporter.PublishFailure(ctx, firstEvent.Status, helps.SummarizeErrorBody(firstEvent.Headers.Get("Content-Type"), body.Bytes()))
 		return nil, statusErr{code: firstEvent.Status, msg: body.String()}
 	}
 	out := make(chan cliproxyexecutor.StreamChunk)
@@ -284,7 +290,7 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 		processEvent := func(event wsrelay.StreamEvent) bool {
 			if event.Err != nil {
 				helps.RecordAPIResponseError(ctx, e.cfg, event.Err)
-				reporter.PublishFailure(ctx)
+				reporter.PublishFailure(ctx, 0, event.Err.Error())
 				out <- cliproxyexecutor.StreamChunk{Err: fmt.Errorf("wsrelay: %v", event.Err)}
 				return false
 			}
@@ -293,6 +299,7 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 				if !metadataLogged && event.Status > 0 {
 					helps.RecordAPIResponseMetadata(ctx, e.cfg, event.Status, event.Headers.Clone())
 					metadataLogged = true
+					reporter.SetStatusCode(event.Status)
 				}
 			case wsrelay.MessageTypeStreamChunk:
 				if len(event.Payload) > 0 {
@@ -313,6 +320,7 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 				if !metadataLogged && event.Status > 0 {
 					helps.RecordAPIResponseMetadata(ctx, e.cfg, event.Status, event.Headers.Clone())
 					metadataLogged = true
+					reporter.SetStatusCode(event.Status)
 				}
 				if len(event.Payload) > 0 {
 					helps.AppendAPIResponseChunk(ctx, e.cfg, event.Payload)
@@ -325,7 +333,7 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 				return false
 			case wsrelay.MessageTypeError:
 				helps.RecordAPIResponseError(ctx, e.cfg, event.Err)
-				reporter.PublishFailure(ctx)
+				reporter.PublishFailure(ctx, 0, event.Err.Error())
 				out <- cliproxyexecutor.StreamChunk{Err: fmt.Errorf("wsrelay: %v", event.Err)}
 				return false
 			}

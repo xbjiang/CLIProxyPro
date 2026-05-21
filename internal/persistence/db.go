@@ -49,7 +49,9 @@ CREATE TABLE IF NOT EXISTS usage_records (
     cached_tokens    INTEGER DEFAULT 0,
     total_tokens     INTEGER DEFAULT 0,
     failed           INTEGER DEFAULT 0,
-    is_keepalive     INTEGER DEFAULT 0
+    is_keepalive     INTEGER DEFAULT 0,
+    status_code      INTEGER DEFAULT 0,
+    error_message    TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_ur_timestamp  ON usage_records(timestamp);
 CREATE INDEX IF NOT EXISTS idx_ur_auth_index ON usage_records(auth_index);
@@ -174,6 +176,21 @@ CREATE INDEX IF NOT EXISTS idx_arh_auth_index ON account_reset_history(auth_inde
 	`).Scan(&rlPrimaryWinExists); qErr == nil && !rlPrimaryWinExists {
 		db.Exec(`ALTER TABLE account_states ADD COLUMN rl_primary_window_minutes INTEGER DEFAULT 0`)
 		db.Exec(`ALTER TABLE account_states ADD COLUMN rl_secondary_window_minutes INTEGER DEFAULT 0`)
+	}
+	// Migration: add status_code and error_message columns to usage_records
+	var scExists bool
+	if qErr := db.QueryRow(`
+		SELECT COUNT(*) > 0 FROM pragma_table_info('usage_records')
+		WHERE name = 'status_code'
+	`).Scan(&scExists); qErr == nil && !scExists {
+		_, _ = db.Exec(`ALTER TABLE usage_records ADD COLUMN status_code INTEGER DEFAULT 0`)
+	}
+	var emExists bool
+	if qErr := db.QueryRow(`
+		SELECT COUNT(*) > 0 FROM pragma_table_info('usage_records')
+		WHERE name = 'error_message'
+	`).Scan(&emExists); qErr == nil && !emExists {
+		_, _ = db.Exec(`ALTER TABLE usage_records ADD COLUMN error_message TEXT DEFAULT ''`)
 	}
 
 	return nil

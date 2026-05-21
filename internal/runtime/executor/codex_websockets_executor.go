@@ -246,12 +246,15 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 			return e.CodexExecutor.Execute(ctx, auth, req, opts)
 		}
 		if respHS != nil && respHS.StatusCode > 0 {
+			reporter.SetStatusCode(respHS.StatusCode)
+			reporter.PublishFailure(ctx, respHS.StatusCode, string(bodyErr))
 			return resp, statusErr{code: respHS.StatusCode, msg: string(bodyErr)}
 		}
 		helps.RecordAPIWebsocketError(ctx, e.cfg, "dial", errDial)
 		return resp, errDial
 	}
 	recordAPIWebsocketHandshake(ctx, e.cfg, respHS)
+	reporter.SetStatusCode(http.StatusOK)
 	if sess == nil {
 		logCodexWebsocketConnected(executionSessionID, authID, wsURL)
 		defer func() {
@@ -346,6 +349,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 				e.invalidateUpstreamConn(sess, conn, "upstream_error", wsErr)
 			}
 			helps.RecordAPIWebsocketError(ctx, e.cfg, "upstream_error", wsErr)
+			reporter.PublishFailure(ctx, http.StatusBadRequest, wsErr.Error())
 			return resp, wsErr
 		}
 
@@ -358,6 +362,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 			var param any
 			out := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, originalPayload, body, payload, &param)
 			resp = cliproxyexecutor.Response{Payload: out, Headers: upstreamHeaders}
+			reporter.SetStatusCode(http.StatusOK)
 			return resp, nil
 		}
 	}
@@ -444,6 +449,8 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 			return e.CodexExecutor.ExecuteStream(ctx, auth, req, opts)
 		}
 		if respHS != nil && respHS.StatusCode > 0 {
+			reporter.SetStatusCode(respHS.StatusCode)
+			reporter.PublishFailure(ctx, respHS.StatusCode, string(bodyErr))
 			return nil, statusErr{code: respHS.StatusCode, msg: string(bodyErr)}
 		}
 		helps.RecordAPIWebsocketError(ctx, e.cfg, "dial", errDial)
@@ -453,6 +460,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		return nil, errDial
 	}
 	recordAPIWebsocketHandshake(ctx, e.cfg, respHS)
+	reporter.SetStatusCode(http.StatusOK)
 
 	if sess == nil {
 		logCodexWebsocketConnected(executionSessionID, authID, wsURL)
@@ -559,7 +567,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 				terminateReason = "read_error"
 				terminateErr = errRead
 				helps.RecordAPIWebsocketError(ctx, e.cfg, "read", errRead)
-				reporter.PublishFailure(ctx)
+				reporter.PublishFailure(ctx, http.StatusInternalServerError, errRead.Error())
 				_ = send(cliproxyexecutor.StreamChunk{Err: errRead})
 				return
 			}
@@ -569,7 +577,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 					terminateReason = "unexpected_binary"
 					terminateErr = err
 					helps.RecordAPIWebsocketError(ctx, e.cfg, "unexpected_binary", err)
-					reporter.PublishFailure(ctx)
+					reporter.PublishFailure(ctx, http.StatusBadRequest, err.Error())
 					if sess != nil {
 						e.invalidateUpstreamConn(sess, conn, "unexpected_binary", err)
 					}
@@ -589,7 +597,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 				terminateReason = "upstream_error"
 				terminateErr = wsErr
 				helps.RecordAPIWebsocketError(ctx, e.cfg, "upstream_error", wsErr)
-				reporter.PublishFailure(ctx)
+				reporter.PublishFailure(ctx, http.StatusBadRequest, wsErr.Error())
 				if sess != nil {
 					e.invalidateUpstreamConn(sess, conn, "upstream_error", wsErr)
 				}

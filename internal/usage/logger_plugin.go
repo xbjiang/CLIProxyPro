@@ -97,6 +97,8 @@ type RequestDetail struct {
 	Tokens      TokenStats `json:"tokens"`
 	Failed      bool       `json:"failed"`
 	IsKeepalive bool       `json:"is_keepalive"`
+	StatusCode   int       `json:"status_code"`
+	ErrorMessage string    `json:"error_message,omitempty"`
 }
 
 // TokenStats captures the token usage breakdown for a request.
@@ -200,13 +202,15 @@ func (s *RequestStatistics) Record(ctx context.Context, record coreusage.Record)
 		s.apis[statsKey] = stats
 	}
 	s.updateAPIStats(stats, modelName, RequestDetail{
-		Timestamp:   timestamp,
-		LatencyMs:   normaliseLatency(record.Latency),
-		Source:      record.Source,
-		AuthIndex:   record.AuthIndex,
-		Tokens:      detail,
-		Failed:      failed,
-		IsKeepalive: kacontext.IsKeepaliveContext(ctx),
+		Timestamp:    timestamp,
+		LatencyMs:    normaliseLatency(record.Latency),
+		Source:       record.Source,
+		AuthIndex:    record.AuthIndex,
+		Tokens:       detail,
+		Failed:       failed,
+		IsKeepalive:  kacontext.IsKeepaliveContext(ctx),
+		StatusCode:   record.StatusCode,
+		ErrorMessage: record.ErrorMessage,
 	})
 
 	s.requestsByDay[dayKey]++
