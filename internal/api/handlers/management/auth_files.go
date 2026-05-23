@@ -511,16 +511,18 @@ func extractCodexIDTokenClaims(auth *coreauth.Auth) gin.H {
 	if !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
 		return nil
 	}
-	idTokenRaw, ok := auth.Metadata["id_token"].(string)
-	if !ok {
-		return nil
+
+	// Try id_token first, fallback to access_token (contains the same claims).
+	var claims *codex.JWTClaims
+	if idToken := strings.TrimSpace(metadataString(auth.Metadata, "id_token")); idToken != "" {
+		claims, _ = codex.ParseJWTToken(idToken)
 	}
-	idToken := strings.TrimSpace(idTokenRaw)
-	if idToken == "" {
-		return nil
+	if claims == nil {
+		if accessToken := strings.TrimSpace(metadataString(auth.Metadata, "access_token")); accessToken != "" {
+			claims, _ = codex.ParseJWTToken(accessToken)
+		}
 	}
-	claims, err := codex.ParseJWTToken(idToken)
-	if err != nil || claims == nil {
+	if claims == nil {
 		return nil
 	}
 
@@ -549,6 +551,14 @@ func extractCodexIDTokenClaims(auth *coreauth.Auth) gin.H {
 		return nil
 	}
 	return result
+}
+
+func metadataString(m map[string]any, key string) string {
+	if m == nil {
+		return ""
+	}
+	v, _ := m[key].(string)
+	return v
 }
 
 func authEmail(auth *coreauth.Auth) string {
