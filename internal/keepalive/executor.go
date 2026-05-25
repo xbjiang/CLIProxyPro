@@ -93,6 +93,9 @@ func (e *Executor) getTargetAccounts(ctx context.Context) ([]string, error) {
 		  AND datetime(next_retry_after) <= datetime('now')
 		  AND (last_keepalive_sent_at IS NULL
 		       OR datetime(last_keepalive_sent_at) < datetime(next_retry_after))
+		  AND (status_message IS NULL
+		       OR (status_message NOT LIKE '%unauthorized%'
+		           AND status_message NOT LIKE '%token_invalidated%'))
 	`)
 	if err != nil {
 		return nil, err
@@ -163,7 +166,23 @@ type KeepaliveResult struct {
 	AuthID  string `json:"auth_id"`
 	Email   string `json:"email,omitempty"`
 	Success bool   `json:"success"`
+	Skipped string `json:"skipped,omitempty"`
 	Error   string `json:"error,omitempty"`
+}
+
+// isAuthInvalidated checks whether an account's status_message indicates a permanent
+// token failure (401 unauthorized / token_invalidated).
+func (e *Executor) isAuthInvalidated(authID string) bool {
+	if e.db == nil {
+		return false
+	}
+	var msg string
+	err := e.db.QueryRow(`SELECT COALESCE(status_message,'') FROM account_states WHERE auth_id = ?`, authID).Scan(&msg)
+	if err != nil {
+		return false
+	}
+	msg = strings.ToLower(msg)
+	return strings.Contains(msg, "unauthorized") || strings.Contains(msg, "token_invalidated")
 }
 
 // ExecuteForAuthIDs sends keepalive requests to specific accounts identified by auth_id,
@@ -191,6 +210,14 @@ func (e *Executor) ExecuteForAuthIDs(ctx context.Context, authIDs []string) []Ke
 		// Resolve email for response
 		if a, ok := e.manager.GetByID(authID); ok && a != nil {
 			r.Email = a.Label
+		}
+
+		// Skip invalidated (401) accounts — keepalive cannot recover them
+		if e.isAuthInvalidated(authID) {
+			r.Skipped = "token_invalidated"
+			log.Infof("keepalive: skipping invalidated account %s (%s)", authID, r.Email)
+			results = append(results, r)
+			continue
 		}
 
 		if err := e.sendKeepaliveRequest(ctx, authID); err != nil {

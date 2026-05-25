@@ -242,6 +242,9 @@ func (s *Scheduler) computeNextBatch(ctx context.Context) (time.Time, error) {
 		SELECT next_retry_after FROM account_states
 		WHERE next_retry_after IS NOT NULL
 		  AND datetime(next_retry_after) > datetime('now')
+		  AND (status_message IS NULL
+		       OR (status_message NOT LIKE '%unauthorized%'
+		           AND status_message NOT LIKE '%token_invalidated%'))
 		ORDER BY next_retry_after ASC
 	`)
 	if err != nil {
