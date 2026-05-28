@@ -113,10 +113,10 @@ func StartService(cfg *config.Config, configPath string, localPassword string) {
 				svc.SetKeepaliveScheduler(capturedSched)
 			}
 
-			// Start compensation + normal scheduling
-			if capturedSched != nil {
-				go capturedSched.StartWithCompensation(context.Background())
-			}
+			// Keepalive disabled: requests cause login state loss and trigger risk control
+			// if capturedSched != nil {
+			// 	go capturedSched.StartWithCompensation(context.Background())
+			// }
 
 			// Start cleanup task (daily, 180-day retention)
 			if capturedDB != nil {
