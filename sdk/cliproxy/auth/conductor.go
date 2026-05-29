@@ -2114,6 +2114,8 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 					} else {
 						switch statusCode {
 						case 401:
+							state.StatusMessage = "unauthorized"
+							auth.StatusMessage = "unauthorized"
 							if disableCooling {
 								state.NextRetryAfter = time.Time{}
 							} else {
@@ -2123,6 +2125,8 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 								shouldSuspendModel = true
 							}
 						case 402, 403:
+							state.StatusMessage = "payment_required"
+							auth.StatusMessage = "payment_required"
 							if disableCooling {
 								state.NextRetryAfter = time.Time{}
 							} else {
@@ -2132,6 +2136,8 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 								shouldSuspendModel = true
 							}
 						case 404:
+							state.StatusMessage = "not_found"
+							auth.StatusMessage = "not_found"
 							if disableCooling {
 								state.NextRetryAfter = time.Time{}
 							} else {
@@ -2141,6 +2147,8 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 								shouldSuspendModel = true
 							}
 						case 429:
+							state.StatusMessage = "quota exhausted"
+							auth.StatusMessage = "quota exhausted"
 							var next time.Time
 							backoffLevel := state.Quota.BackoffLevel
 							if !disableCooling {
