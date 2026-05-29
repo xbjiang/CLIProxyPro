@@ -435,13 +435,26 @@ func (a *Auth) AccountInfo() (string, string) {
 			}
 		}
 	}
-	// Fall back to API key (API-key auth)
+	// Fall back to API key (API-key auth) – mask the key for display safety.
 	if a.Attributes != nil {
 		if v := a.Attributes["api_key"]; v != "" {
-			return "api_key", v
+			masked := maskAPIKey(v)
+			if baseURL := strings.TrimSpace(a.Attributes["base_url"]); baseURL != "" {
+				return "api_key", baseURL + " (" + masked + ")"
+			}
+			return "api_key", masked
 		}
 	}
 	return "", ""
+}
+
+// maskAPIKey masks an API key, keeping the first 4 and last 4 characters visible.
+func maskAPIKey(key string) string {
+	key = strings.TrimSpace(key)
+	if len(key) <= 8 {
+		return strings.Repeat("*", len(key))
+	}
+	return key[:4] + "***" + key[len(key)-4:]
 }
 
 // ExpirationTime attempts to extract the credential expiration timestamp from metadata.

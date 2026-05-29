@@ -330,11 +330,20 @@ func (h *Handler) GetPinnedAccount(c *gin.Context) {
 	}
 	for _, a := range h.authManager.List() {
 		if a.ID == pinnedID {
-			c.JSON(200, gin.H{"pinned": gin.H{
+			pinned := gin.H{
 				"auth_id":    a.ID,
 				"auth_index": a.EnsureIndex(),
 				"email":      authEmail(a),
-			}})
+			}
+			if accountType, account := a.AccountInfo(); accountType != "" || account != "" {
+				if accountType != "" {
+					pinned["account_type"] = accountType
+				}
+				if account != "" {
+					pinned["account"] = account
+				}
+			}
+			c.JSON(200, gin.H{"pinned": pinned})
 			return
 		}
 	}
@@ -361,12 +370,21 @@ func (h *Handler) PutPinnedAccount(c *gin.Context) {
 		if (body.AuthID != nil && a.ID == *body.AuthID) ||
 			(body.AuthIndex != nil && a.EnsureIndex() == *body.AuthIndex) {
 			h.authManager.SetGlobalPinnedAuth(a.ID)
-			c.JSON(200, gin.H{
+			resp := gin.H{
 				"status":     "ok",
 				"auth_id":    a.ID,
 				"auth_index": a.EnsureIndex(),
 				"email":      authEmail(a),
-			})
+			}
+			if accountType, account := a.AccountInfo(); accountType != "" || account != "" {
+				if accountType != "" {
+					resp["account_type"] = accountType
+				}
+				if account != "" {
+					resp["account"] = account
+				}
+			}
+			c.JSON(200, resp)
 			return
 		}
 	}

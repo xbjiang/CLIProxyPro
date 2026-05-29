@@ -185,7 +185,11 @@ func resolveUsageSource(auth *cliproxyauth.Auth, ctxAPIKey string) string {
 		}
 		if auth.Attributes != nil {
 			if key := strings.TrimSpace(auth.Attributes["api_key"]); key != "" {
-				return key
+				masked := maskUsageAPIKey(key)
+				if baseURL := strings.TrimSpace(auth.Attributes["base_url"]); baseURL != "" {
+					return baseURL + " (" + masked + ")"
+				}
+				return masked
 			}
 		}
 	}
@@ -193,6 +197,16 @@ func resolveUsageSource(auth *cliproxyauth.Auth, ctxAPIKey string) string {
 		return trimmed
 	}
 	return ""
+}
+
+// maskUsageAPIKey masks an API key for safe display in usage statistics,
+// keeping the first 4 and last 4 characters visible.
+func maskUsageAPIKey(key string) string {
+	key = strings.TrimSpace(key)
+	if len(key) <= 8 {
+		return strings.Repeat("*", len(key))
+	}
+	return key[:4] + "***" + key[len(key)-4:]
 }
 
 func ParseCodexUsage(data []byte) (usage.Detail, bool) {
