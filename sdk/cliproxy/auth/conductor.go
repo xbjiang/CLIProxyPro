@@ -1216,6 +1216,47 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 	return auth.Clone(), nil
 }
 
+// ResetRuntimeStateForReauth clears all transient availability/quota runtime state
+// for the given auth ID. It is intended to be called right after an explicit OAuth
+// re-authentication, so that a freshly obtained credential is not immediately
+// suppressed by the stale unavailable / quota / model-backoff state left over from
+// the previous (expired) credential.
+//
+// Unlike Update, this bypasses the runtime-state preservation merge (which exists to
+// protect benign watcher reloads / token refreshes from losing live quota state) and
+// forcibly resets the in-memory entry. Returns true if an existing entry was reset.
+func (m *Manager) ResetRuntimeStateForReauth(id string) bool {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false
+	}
+	m.mu.Lock()
+	existing, ok := m.auths[id]
+	if !ok || existing == nil {
+		m.mu.Unlock()
+		return false
+	}
+	existing.Unavailable = false
+	existing.Disabled = false
+	existing.Status = StatusActive
+	existing.StatusMessage = ""
+	existing.NextRetryAfter = time.Time{}
+	existing.Quota = QuotaState{}
+	existing.RateLimit = nil
+	existing.ModelStates = nil
+	existing.LastError = nil
+	existing.LastRefreshedAt = time.Time{}
+	existing.NextRefreshAfter = time.Time{}
+	existing.UpdatedAt = time.Now()
+	clone := existing.Clone()
+	m.auths[id] = clone
+	m.mu.Unlock()
+	if m.scheduler != nil {
+		m.scheduler.upsertAuth(clone)
+	}
+	return true
+}
+
 // Load resets manager state from the backing store.
 func (m *Manager) Load(ctx context.Context) error {
 	m.mu.Lock()
@@ -2674,7 +2715,9 @@ func nextQuotaCooldown(prevLevel int, disableCooling bool) (time.Duration, int) 
 
 // parsePlanTypeFromErrorBody extracts the plan_type from an upstream error
 // response JSON body. The Codex API returns a body like:
-//   {"error":{"type":"usage_limit_reached","plan_type":"free","resets_at":...}}
+//
+//	{"error":{"type":"usage_limit_reached","plan_type":"free","resets_at":...}}
+//
 // When plan_type is present it overrides the cached id_token plan_type.
 func parsePlanTypeFromErrorBody(msg string) string {
 	if msg == "" {

@@ -1442,6 +1442,34 @@ func (h *Handler) saveTokenRecord(ctx context.Context, record *coreauth.Auth) (s
 	return store.Save(ctx, record)
 }
 
+// resetReauthRuntimeState clears stale runtime availability/quota state for a freshly
+// (re-)authenticated account. This makes re-running OAuth on an expired/unavailable
+// account behave like delete-then-re-add: the new credential is not immediately
+// suppressed by the previous credential's quota/backoff/unavailable state.
+//
+// It removes the persisted account_states row (the upsert CASE logic would otherwise
+// keep a stale next_retry_after) and resets the in-memory auth entry. The file watcher
+// then re-reads the fresh credential against the now-clean in-memory state.
+func (h *Handler) resetReauthRuntimeState(record *coreauth.Auth) {
+	if h == nil || record == nil {
+		return
+	}
+	idx := record.EnsureIndex()
+	if h.persistenceDB != nil {
+		if _, err := h.persistenceDB.Exec(
+			`DELETE FROM account_states WHERE auth_index = ? OR auth_id = ?`,
+			idx, record.ID,
+		); err != nil {
+			log.Warnf("reauth reset: failed to clear account_states for %s: %v", record.ID, err)
+		}
+	}
+	if h.authManager != nil {
+		if reset := h.authManager.ResetRuntimeStateForReauth(record.ID); reset {
+			log.Infof("reauth reset: cleared stale runtime state for %s", record.ID)
+		}
+	}
+}
+
 func (h *Handler) RequestAnthropicToken(c *gin.Context) {
 	ctx := context.Background()
 	ctx = PopulateAuthContext(ctx, c)
@@ -1980,6 +2008,10 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 			log.Errorf("Failed to save authentication tokens: %v", errSave)
 			return
 		}
+		// Explicit re-auth: clear any stale unavailable/quota state from the previous
+		// (expired) credential so the fresh token is usable immediately, matching the
+		// behaviour of a manual delete-then-re-add.
+		h.resetReauthRuntimeState(record)
 		fmt.Printf("Authentication successful! Token saved to %s\n", savedPath)
 		if bundle.APIKey != "" {
 			fmt.Println("API key obtained and saved")
