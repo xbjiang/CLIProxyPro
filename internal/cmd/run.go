@@ -61,9 +61,12 @@ func StartService(cfg *config.Config, configPath string, localPassword string) {
 	}
 
 	// Persistence hook (implements coreauth.Hook)
+	// Pass nil scheduler to disable event-driven auto keepalive rescheduling.
+	// The scheduler object is still wired via SetKeepaliveScheduler below so the
+	// manual trigger API keeps working; only the automatic path is severed.
 	var hook *persistence.PersistenceHook
 	if db != nil {
-		hook = persistence.NewPersistenceHook(db, sched)
+		hook = persistence.NewPersistenceHook(db, nil)
 	}
 
 	builder := cliproxy.NewBuilder().
