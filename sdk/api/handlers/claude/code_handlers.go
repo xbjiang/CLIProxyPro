@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	. "github.com/router-for-me/CLIProxyAPI/v6/internal/constant"
@@ -23,12 +25,17 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // ClaudeCodeAPIHandler contains the handlers for Claude API endpoints.
 // It holds a pool of clients to interact with the backend service.
 type ClaudeCodeAPIHandler struct {
 	*handlers.BaseAPIHandler
+	// modelMap maps claude-prefixed display names back to original registry names.
+	// Built during ClaudeModels() and consulted during ClaudeMessages()/ClaudeCountTokens().
+	modelMap   map[string]string
+	modelMapMu sync.RWMutex
 }
 
 // NewClaudeCodeAPIHandler creates a new Claude API handlers instance.
@@ -104,6 +111,9 @@ func (h *ClaudeCodeAPIHandler) ClaudeMessages(c *gin.Context) {
 		return
 	}
 
+	// Resolve claude-prefixed model name back to the original registry name.
+	rawJSON = h.resolveModelInPayload(rawJSON)
+
 	// Check if the client requested a streaming response.
 	streamResult := gjson.GetBytes(rawJSON, "stream")
 	if !streamResult.Exists() || streamResult.Type == gjson.False {
@@ -133,6 +143,9 @@ func (h *ClaudeCodeAPIHandler) ClaudeCountTokens(c *gin.Context) {
 		return
 	}
 
+	// Resolve claude-prefixed model name back to the original registry name.
+	rawJSON = h.resolveModelInPayload(rawJSON)
+
 	c.Header("Content-Type", "application/json")
 
 	alt := h.GetAlt(c)
@@ -158,23 +171,90 @@ func (h *ClaudeCodeAPIHandler) ClaudeCountTokens(c *gin.Context) {
 //   - c: The Gin context for the request.
 func (h *ClaudeCodeAPIHandler) ClaudeModels(c *gin.Context) {
 	models := h.Models()
+
+	// Claude CLI filters models client-side, only keeping IDs that start with "claude-".
+	// We auto-prefix non-claude models and maintain a mapping table so that incoming
+	// requests can be resolved back to the original registry model name.
+	const claudePrefix = "claude-"
+	newMap := make(map[string]string, len(models))
+	prefixed := make([]map[string]any, 0, len(models))
+
+	for _, m := range models {
+		id, _ := m["id"].(string)
+		if id == "" {
+			continue
+		}
+		if strings.HasPrefix(id, claudePrefix) {
+			// Native claude model: map to itself.
+			newMap[id] = id
+			prefixed = append(prefixed, m)
+		} else {
+			// Non-claude model: clone and add prefix.
+			displayID := claudePrefix + id
+			newMap[displayID] = id
+			clone := make(map[string]any, len(m))
+			for k, v := range m {
+				clone[k] = v
+			}
+			clone["id"] = displayID
+			prefixed = append(prefixed, clone)
+		}
+	}
+
+	// Atomically swap the mapping table.
+	h.modelMapMu.Lock()
+	h.modelMap = newMap
+	h.modelMapMu.Unlock()
+
 	firstID := ""
 	lastID := ""
-	if len(models) > 0 {
-		if id, ok := models[0]["id"].(string); ok {
+	if len(prefixed) > 0 {
+		if id, ok := prefixed[0]["id"].(string); ok {
 			firstID = id
 		}
-		if id, ok := models[len(models)-1]["id"].(string); ok {
+		if id, ok := prefixed[len(prefixed)-1]["id"].(string); ok {
 			lastID = id
 		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"data":     models,
+		"data":     prefixed,
 		"has_more": false,
 		"first_id": firstID,
 		"last_id":  lastID,
 	})
+}
+
+// resolveModelName looks up the mapping table to convert a claude-prefixed
+// display name back to the original model ID registered in the model registry.
+// If the name is not found in the map, it is returned unchanged.
+func (h *ClaudeCodeAPIHandler) resolveModelName(name string) string {
+	h.modelMapMu.RLock()
+	original, ok := h.modelMap[name]
+	h.modelMapMu.RUnlock()
+	if ok {
+		return original
+	}
+	return name
+}
+
+// resolveModelInPayload extracts the "model" field from the JSON payload,
+// resolves it via the mapping table, and rewrites the payload if needed.
+func (h *ClaudeCodeAPIHandler) resolveModelInPayload(rawJSON []byte) []byte {
+	modelName := gjson.GetBytes(rawJSON, "model").String()
+	if modelName == "" {
+		return rawJSON
+	}
+	resolved := h.resolveModelName(modelName)
+	if resolved == modelName {
+		return rawJSON
+	}
+	updated, err := sjson.SetBytes(rawJSON, "model", resolved)
+	if err != nil {
+		log.Warnf("failed to rewrite model name in payload: %v", err)
+		return rawJSON
+	}
+	return updated
 }
 
 // handleNonStreamingResponse handles non-streaming content generation requests for Claude models.
