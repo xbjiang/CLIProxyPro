@@ -1060,6 +1060,9 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 			key = strings.ToLower(strings.TrimSpace(a.Provider))
 		}
 		s.registerResolvedModelsForAuth(a, key, applyModelPrefixes(models, a.Prefix, s.cfg != nil && s.cfg.ForceModelPrefix))
+
+		// [NEW] Trigger asynchronous upstream model discovery to potentially override these with actual models from the relay.
+		s.asyncDiscoverUpstreamModels(a, key, excluded)
 		return
 	}
 
