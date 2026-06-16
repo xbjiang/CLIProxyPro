@@ -621,6 +621,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/claude-api-key", s.mgmt.PutClaudeKeys)
 		mgmt.PATCH("/claude-api-key", s.mgmt.PatchClaudeKey)
 		mgmt.DELETE("/claude-api-key", s.mgmt.DeleteClaudeKey)
+		mgmt.DELETE("/cache/claude-models", s.mgmt.DeleteClaudeCache)
 
 		mgmt.GET("/codex-api-key", s.mgmt.GetCodexKeys)
 		mgmt.PUT("/codex-api-key", s.mgmt.PutCodexKeys)
@@ -793,13 +794,18 @@ func (s *Server) watchKeepAlive() {
 func (s *Server) unifiedModelsHandler(openaiHandler *openai.OpenAIAPIHandler, claudeHandler *claude.ClaudeCodeAPIHandler) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userAgent := c.GetHeader("User-Agent")
+		xApiKey := c.GetHeader("x-api-key")
+		userAgentLower := strings.ToLower(userAgent)
 
-		// Route to Claude handler if User-Agent starts with "claude-cli"
-		if strings.HasPrefix(userAgent, "claude-cli") {
-			// log.Debugf("Routing /v1/models to Claude handler for User-Agent: %s", userAgent)
+		// Route to Claude handler if User-Agent matches or if the request uses x-api-key
+		if strings.HasPrefix(userAgent, "claude-cli") ||
+			strings.Contains(userAgentLower, "anthropic") ||
+			strings.Contains(userAgentLower, "claude-code") ||
+			xApiKey != "" {
+			// log.Infof("Routing /v1/models to Claude handler for User-Agent: %s", userAgent)
 			claudeHandler.ClaudeModels(c)
 		} else {
-			// log.Debugf("Routing /v1/models to OpenAI handler for User-Agent: %s", userAgent)
+			// log.Infof("Routing /v1/models to OpenAI handler for User-Agent: %s", userAgent)
 			openaiHandler.OpenAIModels(c)
 		}
 	}

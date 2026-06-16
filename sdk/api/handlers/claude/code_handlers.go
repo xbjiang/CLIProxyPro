@@ -20,6 +20,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 )
@@ -53,7 +54,34 @@ func (h *ClaudeCodeAPIHandler) HandlerType() string {
 func (h *ClaudeCodeAPIHandler) Models() []map[string]any {
 	// Get dynamic models from the global registry
 	modelRegistry := registry.GetGlobalRegistry()
-	return modelRegistry.GetAvailableModels("claude")
+	allModels := modelRegistry.GetAvailableModels("claude")
+
+	// If a specific provider is pinned, only return models supported by that pin.
+	if h.AuthManager != nil {
+		pinID := h.AuthManager.GetPinnedAuthForProvider("claude")
+		if pinID != "" {
+			var pinnedAuth *coreauth.Auth
+			for _, a := range h.AuthManager.List() {
+				if a.ID == pinID {
+					pinnedAuth = a
+					break
+				}
+			}
+			if pinnedAuth != nil {
+				filteredModels := make([]map[string]any, 0, len(allModels))
+				for _, modelMap := range allModels {
+					if id, ok := modelMap["id"].(string); ok {
+						if h.AuthManager.AuthSupportsRouteModel(modelRegistry, pinnedAuth, id) {
+							filteredModels = append(filteredModels, modelMap)
+						}
+					}
+				}
+				return filteredModels
+			}
+		}
+	}
+
+	return allModels
 }
 
 // ClaudeMessages handles Claude-compatible streaming chat completions.

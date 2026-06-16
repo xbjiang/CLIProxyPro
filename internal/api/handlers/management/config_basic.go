@@ -318,12 +318,25 @@ func (h *Handler) PutRoutingStrategy(c *gin.Context) {
 }
 
 // GetPinnedAccount returns the currently pinned account, or {"pinned":null} if none.
+// If ?provider= is specified, it returns the pinned account for that provider.
 func (h *Handler) GetPinnedAccount(c *gin.Context) {
 	if h == nil || h.authManager == nil {
 		c.JSON(200, gin.H{"pinned": nil})
 		return
 	}
-	pinnedID := h.authManager.GetGlobalPinnedAuth()
+	provider := strings.TrimSpace(c.Query("provider"))
+	var pinnedID string
+	if provider != "" {
+		pinnedID = h.authManager.GetPinnedAuthForProvider(provider)
+	} else {
+		// Fallback for legacy clients: pick the first available pin
+		pinnedAuths := h.authManager.GetPinnedAuths()
+		for _, id := range pinnedAuths {
+			pinnedID = id
+			break
+		}
+	}
+
 	if pinnedID == "" {
 		c.JSON(200, gin.H{"pinned": nil})
 		return
@@ -348,11 +361,15 @@ func (h *Handler) GetPinnedAccount(c *gin.Context) {
 		}
 	}
 	// Pinned auth no longer exists – clear stale pin.
-	h.authManager.SetGlobalPinnedAuth("")
+	if provider != "" {
+		h.authManager.ClearPinnedAuth(provider)
+	} else {
+		h.authManager.ClearAllPinnedAuths()
+	}
 	c.JSON(200, gin.H{"pinned": nil})
 }
 
-// PutPinnedAccount pins routing to the specified account (preferred; falls back to fill-first if unavailable).
+// PutPinnedAccount pins routing to the specified account for its provider.
 func (h *Handler) PutPinnedAccount(c *gin.Context) {
 	if h == nil || h.authManager == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "auth manager not available"})
@@ -369,7 +386,12 @@ func (h *Handler) PutPinnedAccount(c *gin.Context) {
 	for _, a := range h.authManager.List() {
 		if (body.AuthID != nil && a.ID == *body.AuthID) ||
 			(body.AuthIndex != nil && a.EnsureIndex() == *body.AuthIndex) {
-			h.authManager.SetGlobalPinnedAuth(a.ID)
+			provider := strings.TrimSpace(c.Query("provider"))
+			if provider != "" {
+				h.authManager.SetPinnedAuthForProvider(provider, a.ID)
+			} else {
+				h.authManager.SetPinnedAuth(a.ID)
+			}
 			resp := gin.H{
 				"status":     "ok",
 				"auth_id":    a.ID,
@@ -391,10 +413,15 @@ func (h *Handler) PutPinnedAccount(c *gin.Context) {
 	c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
 }
 
-// DeletePinnedAccount clears the global account pin and restores normal routing.
+// DeletePinnedAccount clears the pinned account for the specified provider (via ?provider=) or all pins if empty.
 func (h *Handler) DeletePinnedAccount(c *gin.Context) {
 	if h != nil && h.authManager != nil {
-		h.authManager.SetGlobalPinnedAuth("")
+		provider := strings.TrimSpace(c.Query("provider"))
+		if provider != "" {
+			h.authManager.ClearPinnedAuth(provider)
+		} else {
+			h.authManager.ClearAllPinnedAuths()
+		}
 	}
 	c.JSON(200, gin.H{"status": "ok"})
 }
@@ -407,4 +434,14 @@ func (h *Handler) PutProxyURL(c *gin.Context) {
 func (h *Handler) DeleteProxyURL(c *gin.Context) {
 	h.cfg.ProxyURL = ""
 	h.persist(c)
+}
+
+// DeleteClaudeCache clears the local cache files for Claude Code.
+func (h *Handler) DeleteClaudeCache(c *gin.Context) {
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
+		_ = os.Remove(filepath.Join(home, ".claude", "cache", "gateway-models.json"))
+		_ = os.Remove(filepath.Join(home, ".claude", "stats-cache.json"))
+	}
+	c.JSON(200, gin.H{"status": "ok"})
 }

@@ -180,10 +180,10 @@ type Manager struct {
 	refreshCancel context.CancelFunc
 	refreshLoop   *authAutoRefreshLoop
 
-	// globalPinnedAuthID locks all routing to a specific auth when non-empty.
-	// Protected by globalPinnedAuthMu.
-	globalPinnedAuthID string
-	globalPinnedAuthMu sync.RWMutex
+	// pinnedAuths maps a provider key (e.g., "claude", "codex") to a pinned auth ID.
+	// Protected by pinnedAuthsMu.
+	pinnedAuths   map[string]string
+	pinnedAuthsMu sync.RWMutex
 }
 
 // NewManager constructs a manager with optional custom selector and hook.
@@ -202,6 +202,7 @@ func NewManager(store Store, selector Selector, hook Hook) *Manager {
 		auths:            make(map[string]*Auth),
 		providerOffsets:  make(map[string]int),
 		modelPoolOffsets: make(map[string]int),
+		pinnedAuths:      make(map[string]string),
 	}
 	// atomic.Value requires non-nil initial value.
 	manager.runtimeConfig.Store(&internalconfig.Config{})
@@ -357,25 +358,90 @@ func (m *Manager) SetSelector(selector Selector) {
 	}
 }
 
-// SetGlobalPinnedAuth locks all routing to the specified auth ID.
-// Pass an empty string to clear the pin and restore normal routing.
-func (m *Manager) SetGlobalPinnedAuth(authID string) {
+// SetPinnedAuth pins routing to a specific auth ID for its respective provider.
+// If authID is empty, it does nothing. Use ClearPinnedAuth to remove a pin.
+func (m *Manager) SetPinnedAuth(authID string) {
+	if m == nil || authID == "" {
+		return
+	}
+	m.mu.RLock()
+	auth, ok := m.auths[authID]
+	m.mu.RUnlock()
+	if !ok || auth == nil {
+		return
+	}
+	provider := strings.TrimSpace(strings.ToLower(auth.Provider))
+	if provider == "" {
+		return
+	}
+
+	m.pinnedAuthsMu.Lock()
+	m.pinnedAuths[provider] = authID
+	m.pinnedAuthsMu.Unlock()
+}
+
+// SetPinnedAuthForProvider pins routing to a specific auth ID for a given explicitly provided provider.
+func (m *Manager) SetPinnedAuthForProvider(provider, authID string) {
+	if m == nil || provider == "" || authID == "" {
+		return
+	}
+	m.mu.RLock()
+	auth, ok := m.auths[authID]
+	m.mu.RUnlock()
+	if !ok || auth == nil {
+		return
+	}
+
+	provider = strings.TrimSpace(strings.ToLower(provider))
+	m.pinnedAuthsMu.Lock()
+	m.pinnedAuths[provider] = authID
+	m.pinnedAuthsMu.Unlock()
+}
+
+// ClearPinnedAuth removes the pinned auth for the specified provider.
+func (m *Manager) ClearPinnedAuth(provider string) {
 	if m == nil {
 		return
 	}
-	m.globalPinnedAuthMu.Lock()
-	m.globalPinnedAuthID = authID
-	m.globalPinnedAuthMu.Unlock()
+	provider = strings.TrimSpace(strings.ToLower(provider))
+	m.pinnedAuthsMu.Lock()
+	delete(m.pinnedAuths, provider)
+	m.pinnedAuthsMu.Unlock()
 }
 
-// GetGlobalPinnedAuth returns the currently pinned auth ID, or empty string if none.
-func (m *Manager) GetGlobalPinnedAuth() string {
+// ClearAllPinnedAuths removes all pinned auths across all providers.
+func (m *Manager) ClearAllPinnedAuths() {
+	if m == nil {
+		return
+	}
+	m.pinnedAuthsMu.Lock()
+	m.pinnedAuths = make(map[string]string)
+	m.pinnedAuthsMu.Unlock()
+}
+
+// GetPinnedAuthForProvider returns the pinned auth ID for the given provider.
+func (m *Manager) GetPinnedAuthForProvider(provider string) string {
 	if m == nil {
 		return ""
 	}
-	m.globalPinnedAuthMu.RLock()
-	defer m.globalPinnedAuthMu.RUnlock()
-	return m.globalPinnedAuthID
+	provider = strings.TrimSpace(strings.ToLower(provider))
+	m.pinnedAuthsMu.RLock()
+	defer m.pinnedAuthsMu.RUnlock()
+	return m.pinnedAuths[provider]
+}
+
+// GetPinnedAuths returns a copy of the current pinned auths map.
+func (m *Manager) GetPinnedAuths() map[string]string {
+	if m == nil {
+		return nil
+	}
+	m.pinnedAuthsMu.RLock()
+	defer m.pinnedAuthsMu.RUnlock()
+	result := make(map[string]string, len(m.pinnedAuths))
+	for k, v := range m.pinnedAuths {
+		result[k] = v
+	}
+	return result
 }
 
 // SetStore swaps the underlying persistence store.
@@ -611,8 +677,13 @@ func (m *Manager) filterExecutionModels(ctx context.Context, auth *Auth, routeMo
 	// per-model block check so the request always reaches upstream.
 	bypassBlock := kacontext.IsKeepaliveContext(ctx) || kacontext.IsForceProbeContext(ctx)
 	if !bypassBlock && auth != nil {
-		if pin := m.GetGlobalPinnedAuth(); pin != "" && pin == auth.ID {
-			bypassBlock = true
+		// Try to match exact ID or any mapped provider
+		pinned := m.GetPinnedAuths()
+		for _, pinID := range pinned {
+			if pinID == auth.ID {
+				bypassBlock = true
+				break
+			}
 		}
 	}
 	now := time.Now()
@@ -703,7 +774,7 @@ func selectionArgForSelector(selector Selector, routeModel string) string {
 	return routeModel
 }
 
-func (m *Manager) authSupportsRouteModel(registryRef *registry.ModelRegistry, auth *Auth, routeModel string) bool {
+func (m *Manager) AuthSupportsRouteModel(registryRef *registry.ModelRegistry, auth *Auth, routeModel string) bool {
 	if registryRef == nil || auth == nil {
 		return true
 	}
@@ -2811,7 +2882,10 @@ func (m *Manager) useSchedulerFastPath() bool {
 	if m == nil || m.scheduler == nil {
 		return false
 	}
-	if m.GetGlobalPinnedAuth() != "" {
+	m.pinnedAuthsMu.RLock()
+	hasPinned := len(m.pinnedAuths) > 0
+	m.pinnedAuthsMu.RUnlock()
+	if hasPinned {
 		return false
 	}
 	return isBuiltInSelector(m.selector)
@@ -2842,12 +2916,12 @@ func (m *Manager) routeAwareSelectionRequired(auth *Auth, routeModel string) boo
 func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, error) {
 	pinnedAuthID := pinnedAuthIDFromMetadata(opts.Metadata)
 	if pinnedAuthID == "" {
-		// Apply global pin only when the pinned account hasn't been tried yet.
+		// Apply provider pin only when the pinned account hasn't been tried yet.
 		// If it was already tried (quota exceeded / error), fall through to
 		// normal fill-first routing so the request can succeed on another account.
-		if globalPin := m.GetGlobalPinnedAuth(); globalPin != "" {
-			if _, alreadyTried := tried[globalPin]; !alreadyTried {
-				pinnedAuthID = globalPin
+		if providerPin := m.GetPinnedAuthForProvider(provider); providerPin != "" {
+			if _, alreadyTried := tried[providerPin]; !alreadyTried {
+				pinnedAuthID = providerPin
 			}
 		}
 	}
@@ -2878,7 +2952,7 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 		if _, used := tried[candidate.ID]; used {
 			continue
 		}
-		if pinnedAuthID == "" && modelKey != "" && !m.authSupportsRouteModel(registryRef, candidate, model) {
+		if pinnedAuthID == "" && modelKey != "" && !m.AuthSupportsRouteModel(registryRef, candidate, model) {
 			continue
 		}
 		candidates = append(candidates, candidate)
@@ -2981,13 +3055,9 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cli
 
 func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, string, error) {
 	pinnedAuthID := pinnedAuthIDFromMetadata(opts.Metadata)
-	if pinnedAuthID == "" {
-		if globalPin := m.GetGlobalPinnedAuth(); globalPin != "" {
-			if _, alreadyTried := tried[globalPin]; !alreadyTried {
-				pinnedAuthID = globalPin
-			}
-		}
-	}
+	// For mixed providers, we do not apply a single provider pin at this stage,
+	// because we don't know which provider will be selected. Instead, if a candidate
+	// is pinned for its own provider, we prioritize it during candidate selection below.
 
 	providerSet := make(map[string]struct{}, len(providers))
 	for _, provider := range providers {
@@ -3032,7 +3102,13 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 		if _, ok := m.executors[providerKey]; !ok {
 			continue
 		}
-		if pinnedAuthID == "" && modelKey != "" && !m.authSupportsRouteModel(registryRef, candidate, model) {
+		if pinnedAuthID == "" {
+			// Check if candidate is pinned for its provider
+			if providerPin := m.GetPinnedAuthForProvider(providerKey); providerPin != "" && candidate.ID != providerPin {
+				continue
+			}
+		}
+		if pinnedAuthID == "" && modelKey != "" && !m.AuthSupportsRouteModel(registryRef, candidate, model) {
 			continue
 		}
 		candidates = append(candidates, candidate)
