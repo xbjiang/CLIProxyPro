@@ -102,7 +102,7 @@ func TestGetRequestDetails_PreservesSuffix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			providers, model, errMsg := handler.getRequestDetails(tt.inputModel)
+			providers, model, errMsg := handler.getRequestDetails("", tt.inputModel)
 			if (errMsg != nil) != tt.wantErr {
 				t.Fatalf("getRequestDetails() error = %v, wantErr %v", errMsg, tt.wantErr)
 			}
@@ -119,10 +119,77 @@ func TestGetRequestDetails_PreservesSuffix(t *testing.T) {
 	}
 }
 
+// TestGetRequestDetails_ChannelIsolation verifies that a model id registered under
+// BOTH the claude and codex providers (the cross-contamination scenario: a multi-model
+// relay or claude-relay upstream discovery registering gpt-* under provider=claude) is
+// scoped to the entry channel the request arrives on.
+func TestGetRequestDetails_ChannelIsolation(t *testing.T) {
+	modelRegistry := registry.GetGlobalRegistry()
+	now := time.Now().Unix()
+
+	// gpt-5.5 is served by both pools: codex (native) and claude (polluted via a
+	// claude-panel aggregator relay's upstream discovery).
+	modelRegistry.RegisterClient("test-iso-codex", "codex", []*registry.ModelInfo{
+		{ID: "gpt-5.5", Created: now + 10},
+	})
+	modelRegistry.RegisterClient("test-iso-claude", "claude", []*registry.ModelInfo{
+		{ID: "gpt-5.5", Created: now + 9},
+		{ID: "claude-sonnet-4-5", Created: now + 8},
+	})
+	for _, id := range []string{"test-iso-codex", "test-iso-claude"} {
+		clientID := id
+		t.Cleanup(func() { modelRegistry.UnregisterClient(clientID) })
+	}
+
+	handler := NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, coreauth.NewManager(nil, nil, nil))
+
+	tests := []struct {
+		name          string
+		handlerType   string
+		inputModel    string
+		wantProviders []string
+		wantErr       bool
+	}{
+		{
+			name:          "codex channel never routes gpt-5.5 to claude pool",
+			handlerType:   "openai-response",
+			inputModel:    "gpt-5.5",
+			wantProviders: []string{"codex"},
+		},
+		{
+			name:          "claude channel keeps gpt-5.5 in claude pool only",
+			handlerType:   "claude",
+			inputModel:    "gpt-5.5",
+			wantProviders: []string{"claude"},
+		},
+		{
+			name:          "claude channel cannot reach a codex-only model",
+			handlerType:   "claude",
+			inputModel:    "claude-sonnet-4-5",
+			wantProviders: []string{"claude"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			providers, _, errMsg := handler.getRequestDetails(tt.handlerType, tt.inputModel)
+			if (errMsg != nil) != tt.wantErr {
+				t.Fatalf("getRequestDetails() error = %v, wantErr %v", errMsg, tt.wantErr)
+			}
+			if errMsg != nil {
+				return
+			}
+			if !reflect.DeepEqual(providers, tt.wantProviders) {
+				t.Fatalf("getRequestDetails() providers = %v, want %v", providers, tt.wantProviders)
+			}
+		})
+	}
+}
+
 func TestGetRequestDetails_ImageModelReturns503(t *testing.T) {
 	handler := NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, coreauth.NewManager(nil, nil, nil))
 
-	_, _, errMsg := handler.getRequestDetails("gpt-image-2")
+	_, _, errMsg := handler.getRequestDetails("", "gpt-image-2")
 	if errMsg == nil {
 		t.Fatalf("expected error for gpt-image-2, got nil")
 	}

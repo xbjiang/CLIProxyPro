@@ -475,7 +475,7 @@ func appendAPIResponse(c *gin.Context, data []byte) {
 // ExecuteWithAuthManager executes a non-streaming request via the core auth manager.
 // This path is the only supported execution route.
 func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType, modelName string, rawJSON []byte, alt string) ([]byte, http.Header, *interfaces.ErrorMessage) {
-	providers, normalizedModel, errMsg := h.getRequestDetails(modelName)
+	providers, normalizedModel, errMsg := h.getRequestDetails(handlerType, modelName)
 	if errMsg != nil {
 		return nil, nil, errMsg
 	}
@@ -522,7 +522,7 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 // ExecuteCountWithAuthManager executes a non-streaming request via the core auth manager.
 // This path is the only supported execution route.
 func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handlerType, modelName string, rawJSON []byte, alt string) ([]byte, http.Header, *interfaces.ErrorMessage) {
-	providers, normalizedModel, errMsg := h.getRequestDetails(modelName)
+	providers, normalizedModel, errMsg := h.getRequestDetails(handlerType, modelName)
 	if errMsg != nil {
 		return nil, nil, errMsg
 	}
@@ -570,7 +570,7 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 // This path is the only supported execution route.
 // The returned http.Header carries upstream response headers captured before streaming begins.
 func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handlerType, modelName string, rawJSON []byte, alt string) (<-chan []byte, http.Header, <-chan *interfaces.ErrorMessage) {
-	providers, normalizedModel, errMsg := h.getRequestDetails(modelName)
+	providers, normalizedModel, errMsg := h.getRequestDetails(handlerType, modelName)
 	if errMsg != nil {
 		errChan := make(chan *interfaces.ErrorMessage, 1)
 		errChan <- errMsg
@@ -784,7 +784,51 @@ func statusFromError(err error) int {
 	return 0
 }
 
-func (h *BaseAPIHandler) getRequestDetails(modelName string) (providers []string, normalizedModel string, err *interfaces.ErrorMessage) {
+// isolateProvidersByHandler enforces strict request-path isolation between the
+// Claude entry channel and the Codex/OpenAI entry channel.
+//
+// Routing is otherwise decided purely by model name (a single global model->provider
+// table shared across all channels). Because aggregator relays (e.g. a multi-model
+// gateway configured under both panels, or claude-relay upstream discovery pulling in
+// gpt-* models) can register the same model id under multiple providers, a request
+// arriving via one CLI could otherwise leak onto the other CLI's relay pool.
+//
+// We scope the resolved provider list to the channel the request actually came from:
+//   - claude handler  (/v1/messages):  keep ONLY the claude relay pool
+//   - openai / openai-response (codex /responses, OpenAI): drop the claude pool
+//   - everything else (gemini, ...):   unchanged
+//
+// This makes the shared model table harmless: the same base-url+api-key configured
+// under both the Claude and Codex panels yields two independent auth entries that
+// never compete, and a Codex-pinned relay always stays on the single-provider path
+// where the pin is honored.
+func isolateProvidersByHandler(handlerType string, providers []string) []string {
+	if len(providers) == 0 {
+		return providers
+	}
+	switch strings.ToLower(strings.TrimSpace(handlerType)) {
+	case "claude":
+		filtered := providers[:0:0]
+		for _, p := range providers {
+			if strings.EqualFold(strings.TrimSpace(p), "claude") {
+				filtered = append(filtered, p)
+			}
+		}
+		return filtered
+	case "openai", "openai-response", "codex":
+		filtered := providers[:0:0]
+		for _, p := range providers {
+			if !strings.EqualFold(strings.TrimSpace(p), "claude") {
+				filtered = append(filtered, p)
+			}
+		}
+		return filtered
+	default:
+		return providers
+	}
+}
+
+func (h *BaseAPIHandler) getRequestDetails(handlerType, modelName string) (providers []string, normalizedModel string, err *interfaces.ErrorMessage) {
 	resolvedModelName := modelName
 	initialSuffix := thinking.ParseSuffix(modelName)
 	if initialSuffix.ModelName == "auto" {
@@ -820,6 +864,14 @@ func (h *BaseAPIHandler) getRequestDetails(modelName string) (providers []string
 
 	if len(providers) == 0 {
 		return nil, "", &interfaces.ErrorMessage{StatusCode: http.StatusBadGateway, Error: fmt.Errorf("unknown provider for model %s", modelName)}
+	}
+
+	// Enforce strict isolation between the Claude and Codex/OpenAI entry channels so a
+	// request from one CLI can never be routed to the other CLI's relay pool, even when
+	// the same model id is registered under multiple providers.
+	providers = isolateProvidersByHandler(handlerType, providers)
+	if len(providers) == 0 {
+		return nil, "", &interfaces.ErrorMessage{StatusCode: http.StatusBadGateway, Error: fmt.Errorf("model %s is not available on this endpoint", modelName)}
 	}
 
 	// The thinking suffix is preserved in the model name itself, so no

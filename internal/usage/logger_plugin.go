@@ -94,11 +94,14 @@ type RequestDetail struct {
 	LatencyMs   int64      `json:"latency_ms"`
 	Source      string     `json:"source"`
 	AuthIndex   string     `json:"auth_index"`
-	Tokens      TokenStats `json:"tokens"`
-	Failed      bool       `json:"failed"`
-	IsKeepalive bool       `json:"is_keepalive"`
-	StatusCode   int       `json:"status_code"`
-	ErrorMessage string    `json:"error_message,omitempty"`
+	// Provider is the upstream agent that served the request (e.g. "codex" or "claude"),
+	// used by the UI to tag whether usage came from Codex CLI or Claude Code.
+	Provider     string     `json:"provider,omitempty"`
+	Tokens       TokenStats `json:"tokens"`
+	Failed       bool       `json:"failed"`
+	IsKeepalive  bool       `json:"is_keepalive"`
+	StatusCode   int        `json:"status_code"`
+	ErrorMessage string     `json:"error_message,omitempty"`
 }
 
 // TokenStats captures the token usage breakdown for a request.
@@ -206,6 +209,7 @@ func (s *RequestStatistics) Record(ctx context.Context, record coreusage.Record)
 		LatencyMs:    normaliseLatency(record.Latency),
 		Source:       record.Source,
 		AuthIndex:    record.AuthIndex,
+		Provider:     strings.ToLower(strings.TrimSpace(record.Provider)),
 		Tokens:       detail,
 		Failed:       failed,
 		IsKeepalive:  kacontext.IsKeepaliveContext(ctx),

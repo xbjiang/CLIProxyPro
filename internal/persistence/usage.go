@@ -228,6 +228,7 @@ type UsageRecord struct {
 	Timestamp       string `json:"timestamp"`
 	Source          string `json:"source"`
 	Model           string `json:"model"`
+	Provider        string `json:"provider,omitempty"`
 	Failed          bool   `json:"failed"`
 	IsKeepalive     bool   `json:"is_keepalive"`
 	InputTokens     int64  `json:"input_tokens"`
@@ -551,7 +552,7 @@ func QueryByDateRange(ctx context.Context, db *sql.DB, startDate, endDate string
 
 	// Detailed logs (ordered by timestamp desc, limit 1000)
 	rows3, err := db.QueryContext(ctx, `
-		SELECT timestamp, COALESCE(source,''), model, failed, is_keepalive,
+		SELECT timestamp, COALESCE(source,''), model, COALESCE(provider,''), failed, is_keepalive,
 			   input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens,
 			   status_code, error_message
 		FROM usage_records
@@ -567,7 +568,7 @@ func QueryByDateRange(ctx context.Context, db *sql.DB, startDate, endDate string
 	for rows3.Next() {
 		var rec UsageRecord
 		var failedInt, keepaliveInt int
-		if err := rows3.Scan(&rec.Timestamp, &rec.Source, &rec.Model, &failedInt, &keepaliveInt,
+		if err := rows3.Scan(&rec.Timestamp, &rec.Source, &rec.Model, &rec.Provider, &failedInt, &keepaliveInt,
 			&rec.InputTokens, &rec.OutputTokens, &rec.ReasoningTokens, &rec.CachedTokens, &rec.TotalTokens,
 			&rec.StatusCode, &rec.ErrorMessage); err != nil {
 			return nil, nil, err
