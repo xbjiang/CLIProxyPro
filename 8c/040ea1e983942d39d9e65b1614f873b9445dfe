@@ -1,0 +1,13 @@
+sdk/cliproxy/auth/conductor.go
+  ai_agent 187-190,384,403,415,426-448,452-463,3154-3159
+internal/cmd/run.go
+  ai_agent 9,104-111,273-298
+internal/api/handlers/management/config_basic.go
+  ai_agent 346,348-350,397-400
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.17-trip",
+  "base_commit_sha": "8c040ea1e983942d39d9e65b1614f873b9445dfe",
+  "prompts": {}
+}
