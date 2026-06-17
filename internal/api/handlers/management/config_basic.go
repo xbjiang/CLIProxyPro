@@ -343,10 +343,11 @@ func (h *Handler) GetPinnedAccount(c *gin.Context) {
 	}
 	for _, a := range h.authManager.List() {
 		if a.ID == pinnedID {
+			_, displayName := a.AccountInfo()
 			pinned := gin.H{
-				"auth_id":    a.ID,
-				"auth_index": a.EnsureIndex(),
-				"email":      authEmail(a),
+				"auth_id":      a.ID,
+				"auth_index":   a.EnsureIndex(),
+				"display_name": displayName,
 			}
 			if accountType, account := a.AccountInfo(); accountType != "" || account != "" {
 				if accountType != "" {
@@ -393,10 +394,10 @@ func (h *Handler) PutPinnedAccount(c *gin.Context) {
 				h.authManager.SetPinnedAuth(a.ID)
 			}
 			resp := gin.H{
-				"status":     "ok",
-				"auth_id":    a.ID,
-				"auth_index": a.EnsureIndex(),
-				"email":      authEmail(a),
+				"status":       "ok",
+				"auth_id":      a.ID,
+				"auth_index":   a.EnsureIndex(),
+				"display_name": func() string { _, dn := a.AccountInfo(); return dn }(),
 			}
 			if accountType, account := a.AccountInfo(); accountType != "" || account != "" {
 				if accountType != "" {

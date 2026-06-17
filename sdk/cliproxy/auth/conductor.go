@@ -184,6 +184,10 @@ type Manager struct {
 	// Protected by pinnedAuthsMu.
 	pinnedAuths   map[string]string
 	pinnedAuthsMu sync.RWMutex
+
+	// onPinnedChange is called after any pin mutation with the full map snapshot.
+	// Used to persist pin state to SQLite. Protected by pinnedAuthsMu (called under lock).
+	onPinnedChange func(map[string]string)
 }
 
 // NewManager constructs a manager with optional custom selector and hook.
@@ -377,6 +381,7 @@ func (m *Manager) SetPinnedAuth(authID string) {
 
 	m.pinnedAuthsMu.Lock()
 	m.pinnedAuths[provider] = authID
+	m.notifyPinnedChangeLocked()
 	m.pinnedAuthsMu.Unlock()
 }
 
@@ -395,6 +400,7 @@ func (m *Manager) SetPinnedAuthForProvider(provider, authID string) {
 	provider = strings.TrimSpace(strings.ToLower(provider))
 	m.pinnedAuthsMu.Lock()
 	m.pinnedAuths[provider] = authID
+	m.notifyPinnedChangeLocked()
 	m.pinnedAuthsMu.Unlock()
 }
 
@@ -406,6 +412,7 @@ func (m *Manager) ClearPinnedAuth(provider string) {
 	provider = strings.TrimSpace(strings.ToLower(provider))
 	m.pinnedAuthsMu.Lock()
 	delete(m.pinnedAuths, provider)
+	m.notifyPinnedChangeLocked()
 	m.pinnedAuthsMu.Unlock()
 }
 
@@ -416,7 +423,42 @@ func (m *Manager) ClearAllPinnedAuths() {
 	}
 	m.pinnedAuthsMu.Lock()
 	m.pinnedAuths = make(map[string]string)
+	m.notifyPinnedChangeLocked()
 	m.pinnedAuthsMu.Unlock()
+}
+
+// SetOnPinnedChange registers a callback invoked after any pin mutation.
+func (m *Manager) SetOnPinnedChange(fn func(map[string]string)) {
+	if m == nil {
+		return
+	}
+	m.pinnedAuthsMu.Lock()
+	m.onPinnedChange = fn
+	m.pinnedAuthsMu.Unlock()
+}
+
+// RestorePinnedAuths bulk-loads pinned state (e.g. from SQLite on startup).
+func (m *Manager) RestorePinnedAuths(pinned map[string]string) {
+	if m == nil || len(pinned) == 0 {
+		return
+	}
+	m.pinnedAuthsMu.Lock()
+	for k, v := range pinned {
+		m.pinnedAuths[strings.TrimSpace(strings.ToLower(k))] = v
+	}
+	m.pinnedAuthsMu.Unlock()
+}
+
+// notifyPinnedChangeLocked calls onPinnedChange with a snapshot. Must be called with pinnedAuthsMu held.
+func (m *Manager) notifyPinnedChangeLocked() {
+	if m.onPinnedChange == nil {
+		return
+	}
+	snap := make(map[string]string, len(m.pinnedAuths))
+	for k, v := range m.pinnedAuths {
+		snap[k] = v
+	}
+	m.onPinnedChange(snap)
 }
 
 // GetPinnedAuthForProvider returns the pinned auth ID for the given provider.
@@ -3109,7 +3151,12 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 			}
 		}
 		if pinnedAuthID == "" && modelKey != "" && !m.AuthSupportsRouteModel(registryRef, candidate, model) {
-			continue
+			// Skip model support check for provider-pinned auths — they should
+			// transparently forward the request to the upstream relay regardless
+			// of what the local model registry says.
+			if providerPin := m.GetPinnedAuthForProvider(providerKey); providerPin == "" || candidate.ID != providerPin {
+				continue
+			}
 		}
 		candidates = append(candidates, candidate)
 	}

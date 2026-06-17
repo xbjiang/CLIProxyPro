@@ -6,6 +6,7 @@ package cmd
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/signal"
@@ -98,6 +99,14 @@ func StartService(cfg *config.Config, configPath string, localPassword string) {
 			// Restore persisted account states into memory
 			if capturedDB != nil && mgr != nil {
 				restoreAccountStates(capturedDB, mgr)
+			}
+
+			// Restore persisted pinned auths from SQLite
+			if capturedDB != nil && mgr != nil {
+				restorePinnedAuths(capturedDB, mgr)
+				mgr.SetOnPinnedChange(func(pinned map[string]string) {
+					persistPinnedAuths(capturedDB, pinned)
+				})
 			}
 
 			// Seed in-memory usage statistics from SQLite so /v0/management/usage
@@ -260,4 +269,31 @@ func WaitForCloudDeploy() {
 
 	<-ctxSignal.Done()
 	log.Info("Cloud deploy mode: Shutdown signal received; exiting")
+}
+
+const pinnedAuthsSettingKey = "pinned_auths"
+
+func restorePinnedAuths(db *sql.DB, mgr *coreauth.Manager) {
+	val, err := persistence.GetSetting(db, pinnedAuthsSettingKey)
+	if err != nil || val == "" {
+		return
+	}
+	var pinned map[string]string
+	if err := json.Unmarshal([]byte(val), &pinned); err != nil {
+		log.Warnf("persistence: failed to parse pinned_auths: %v", err)
+		return
+	}
+	mgr.RestorePinnedAuths(pinned)
+	log.Infof("persistence: restored %d pinned auth(s)", len(pinned))
+}
+
+func persistPinnedAuths(db *sql.DB, pinned map[string]string) {
+	data, err := json.Marshal(pinned)
+	if err != nil {
+		log.Warnf("persistence: failed to marshal pinned_auths: %v", err)
+		return
+	}
+	if err := persistence.SetSetting(db, pinnedAuthsSettingKey, string(data)); err != nil {
+		log.Warnf("persistence: failed to save pinned_auths: %v", err)
+	}
 }
