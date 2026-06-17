@@ -862,6 +862,19 @@ func (h *BaseAPIHandler) getRequestDetails(handlerType, modelName string) (provi
 		providers = util.GetProviderName(resolvedModelName)
 	}
 
+	// When no provider is registered for a model but the entry channel is known,
+	// fall back to the channel's own provider rather than rejecting the request.
+	// CLIProxyPro is a proxy layer — if the upstream relay doesn't support the
+	// model, it should return the error itself; we should not block the request.
+	if len(providers) == 0 {
+		switch strings.ToLower(strings.TrimSpace(handlerType)) {
+		case "claude":
+			providers = []string{"claude"}
+		case "openai", "openai-response", "codex":
+			providers = []string{"codex"}
+		}
+	}
+
 	if len(providers) == 0 {
 		return nil, "", &interfaces.ErrorMessage{StatusCode: http.StatusBadGateway, Error: fmt.Errorf("unknown provider for model %s", modelName)}
 	}
