@@ -2247,7 +2247,6 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 		} else {
 			if result.Model != "" {
 				if !isRequestScopedNotFoundResultError(result.Error) {
-					disableCooling := quotaCooldownDisabledForAuth(auth)
 					state := ensureModelState(auth, result.Model)
 					state.Unavailable = true
 					state.Status = StatusError
@@ -2265,88 +2264,47 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 						state.NextRetryAfter = next
 						suspendReason = "model_not_supported"
 						shouldSuspendModel = true
-					} else {
-						switch statusCode {
-						case 401:
-							state.StatusMessage = "unauthorized"
-							auth.StatusMessage = "unauthorized"
-							if disableCooling {
+						} else {
+							switch statusCode {
+							case 401:
+								state.StatusMessage = "unauthorized"
+								auth.StatusMessage = "unauthorized"
 								state.NextRetryAfter = time.Time{}
-							} else {
-								next := now.Add(30 * time.Minute)
-								state.NextRetryAfter = next
-								suspendReason = "unauthorized"
-								shouldSuspendModel = true
-							}
-						case 402, 403:
-							state.StatusMessage = "payment_required"
-							auth.StatusMessage = "payment_required"
-							if disableCooling {
+							case 402, 403:
+								state.StatusMessage = "payment_required"
+								auth.StatusMessage = "payment_required"
 								state.NextRetryAfter = time.Time{}
-							} else {
-								next := now.Add(30 * time.Minute)
-								state.NextRetryAfter = next
-								suspendReason = "payment_required"
-								shouldSuspendModel = true
-							}
-						case 404:
-							state.StatusMessage = "not_found"
-							auth.StatusMessage = "not_found"
-							if disableCooling {
+							case 404:
+								state.StatusMessage = "not_found"
+								auth.StatusMessage = "not_found"
 								state.NextRetryAfter = time.Time{}
-							} else {
-								next := now.Add(12 * time.Hour)
-								state.NextRetryAfter = next
-								suspendReason = "not_found"
-								shouldSuspendModel = true
-							}
-						case 429:
-							state.StatusMessage = "quota exhausted"
-							auth.StatusMessage = "quota exhausted"
-							var next time.Time
-							backoffLevel := state.Quota.BackoffLevel
-							if !disableCooling {
+							case 429:
+								state.StatusMessage = "quota exhausted"
+								auth.StatusMessage = "quota exhausted"
+								var next time.Time
 								if result.RetryAfter != nil {
 									next = now.Add(*result.RetryAfter)
-								} else {
-									cooldown, nextLevel := nextQuotaCooldown(backoffLevel, disableCooling)
-									if cooldown > 0 {
-										next = now.Add(cooldown)
-									}
-									backoffLevel = nextLevel
 								}
-							}
-							state.NextRetryAfter = next
-							state.Quota = QuotaState{
-								Exceeded:      true,
-								Reason:        "quota",
-								NextRecoverAt: next,
-								BackoffLevel:  backoffLevel,
-							}
-							if !disableCooling {
-								suspendReason = "quota"
-								shouldSuspendModel = true
-								setModelQuota = true
-							}
-							if result.Error != nil {
-								if pt := parsePlanTypeFromErrorBody(result.Error.Message); pt != "" {
-									if auth.Attributes == nil {
-										auth.Attributes = make(map[string]string)
-									}
-									auth.Attributes["plan_type_override"] = pt
-								}
-							}
-						case 408, 500, 502, 503, 504:
-							if disableCooling {
-								state.NextRetryAfter = time.Time{}
-							} else {
-								next := now.Add(1 * time.Minute)
 								state.NextRetryAfter = next
+								state.Quota = QuotaState{
+									Exceeded:      true,
+									Reason:        "quota",
+									NextRecoverAt: next,
+								}
+								if result.Error != nil {
+									if pt := parsePlanTypeFromErrorBody(result.Error.Message); pt != "" {
+										if auth.Attributes == nil {
+											auth.Attributes = make(map[string]string)
+										}
+										auth.Attributes["plan_type_override"] = pt
+									}
+								}
+							case 400, 408, 500, 502, 503, 504:
+								state.NextRetryAfter = time.Time{}
+							default:
+								state.NextRetryAfter = time.Time{}
 							}
-						default:
-							state.NextRetryAfter = time.Time{}
 						}
-					}
 
 					auth.Status = StatusError
 					auth.UpdatedAt = now
@@ -2712,11 +2670,6 @@ func isRequestInvalidError(err error) bool {
 	}
 	status := statusCodeFromError(err)
 	switch status {
-	case http.StatusBadRequest:
-		msg := err.Error()
-		return strings.Contains(msg, "invalid_request_error") ||
-			strings.Contains(msg, "INVALID_ARGUMENT") ||
-			strings.Contains(msg, "FAILED_PRECONDITION")
 	case http.StatusNotFound:
 		return isRequestScopedNotFoundMessage(err.Error())
 	case http.StatusUnprocessableEntity:
@@ -2737,7 +2690,6 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 	if isRequestScopedNotFoundResultError(resultErr) {
 		return
 	}
-	disableCooling := quotaCooldownDisabledForAuth(auth)
 	auth.Unavailable = true
 	auth.Status = StatusError
 	auth.UpdatedAt = now
@@ -2751,25 +2703,13 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 	switch statusCode {
 	case 401:
 		auth.StatusMessage = "unauthorized"
-		if disableCooling {
-			auth.NextRetryAfter = time.Time{}
-		} else {
-			auth.NextRetryAfter = now.Add(30 * time.Minute)
-		}
+		auth.NextRetryAfter = time.Time{}
 	case 402, 403:
 		auth.StatusMessage = "payment_required"
-		if disableCooling {
-			auth.NextRetryAfter = time.Time{}
-		} else {
-			auth.NextRetryAfter = now.Add(30 * time.Minute)
-		}
+		auth.NextRetryAfter = time.Time{}
 	case 404:
 		auth.StatusMessage = "not_found"
-		if disableCooling {
-			auth.NextRetryAfter = time.Time{}
-		} else {
-			auth.NextRetryAfter = now.Add(12 * time.Hour)
-		}
+		auth.NextRetryAfter = time.Time{}
 	case 429:
 		auth.StatusMessage = "quota exhausted"
 		auth.Quota.Exceeded = true
@@ -2781,26 +2721,14 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 			auth.Attributes["plan_type_override"] = pt
 		}
 		var next time.Time
-		if !disableCooling {
-			if retryAfter != nil {
-				next = now.Add(*retryAfter)
-			} else {
-				cooldown, nextLevel := nextQuotaCooldown(auth.Quota.BackoffLevel, disableCooling)
-				if cooldown > 0 {
-					next = now.Add(cooldown)
-				}
-				auth.Quota.BackoffLevel = nextLevel
-			}
+		if retryAfter != nil {
+			next = now.Add(*retryAfter)
 		}
 		auth.Quota.NextRecoverAt = next
 		auth.NextRetryAfter = next
-	case 408, 500, 502, 503, 504:
+	case 400, 408, 500, 502, 503, 504:
 		auth.StatusMessage = "transient upstream error"
-		if disableCooling {
-			auth.NextRetryAfter = time.Time{}
-		} else {
-			auth.NextRetryAfter = now.Add(1 * time.Minute)
-		}
+		auth.NextRetryAfter = time.Time{}
 	default:
 		if auth.StatusMessage == "" {
 			auth.StatusMessage = "request failed"
