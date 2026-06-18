@@ -56,6 +56,7 @@ type Watcher struct {
 	pendingUpdates    map[string]AuthUpdate
 	pendingOrder      []string
 	dispatchCancel    context.CancelFunc
+	initialSyncOnce   sync.Once
 	storePersister    storePersister
 	mirroredAuthDir   string
 	oldConfigYaml     []byte
@@ -65,9 +66,10 @@ type Watcher struct {
 type AuthUpdateAction string
 
 const (
-	AuthUpdateActionAdd    AuthUpdateAction = "add"
-	AuthUpdateActionModify AuthUpdateAction = "modify"
-	AuthUpdateActionDelete AuthUpdateAction = "delete"
+	AuthUpdateActionAdd          AuthUpdateAction = "add"
+	AuthUpdateActionModify       AuthUpdateAction = "modify"
+	AuthUpdateActionDelete       AuthUpdateAction = "delete"
+	AuthUpdateActionSyncComplete AuthUpdateAction = "sync_complete"
 )
 
 // AuthUpdate describes an incremental change to auth configuration.

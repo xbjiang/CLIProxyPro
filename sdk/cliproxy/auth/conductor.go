@@ -23,6 +23,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -1002,6 +1003,39 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 			}
 			lastErr = errStream
 			continue
+		}
+
+		if ct := streamResult.Headers.Get("Content-Type"); strings.Contains(ct, "text/html") {
+			const htmlErrMsg = "upstream returned text/html instead of SSE stream (wrong base-url? missing /v1?)"
+			htmlErr := &Error{Code: "wrong_content_type", Message: htmlErrMsg, Retryable: true}
+			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: htmlErr}
+			m.MarkResult(ctx, result)
+			var htmlSource string
+			if attrs := auth.Attributes; attrs != nil {
+				if baseURL := strings.TrimSpace(attrs["base_url"]); baseURL != "" {
+					apiKey := strings.TrimSpace(attrs["api_key"])
+					if len(apiKey) > 8 {
+						apiKey = apiKey[:4] + "***" + apiKey[len(apiKey)-4:]
+					}
+					htmlSource = baseURL + " (" + apiKey + ")"
+				}
+			}
+			if htmlSource == "" {
+				htmlSource = auth.Label
+			}
+			coreusage.PublishRecord(ctx, coreusage.Record{
+				Provider:     provider,
+				Model:        resultModel,
+				AuthID:       auth.ID,
+				AuthIndex:    auth.Index,
+				Source:       htmlSource,
+				Failed:       true,
+				StatusCode:   200,
+				ErrorMessage: htmlErrMsg,
+				RequestedAt:  time.Now(),
+			})
+			discardStreamChunks(streamResult.Chunks)
+			return nil, htmlErr
 		}
 
 		buffered, closed, bootstrapErr := readStreamBootstrap(ctx, streamResult.Chunks)

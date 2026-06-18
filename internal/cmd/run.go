@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -79,14 +80,18 @@ func StartService(cfg *config.Config, configPath string, localPassword string) {
 		builder = builder.WithCoreAuthHook(hook)
 	}
 
-	// Capture closures for OnAfterStart
+	// Capture closures for OnAfterStart / OnAfterInitialSync
 	capturedDB := db
 	capturedSched := sched
 	capturedHook := hook
+	// syncMgr is set in OnAfterStart and read in OnAfterInitialSync.
+	// Safe: watcher (and thus OnAfterInitialSync) starts only after OnAfterStart returns.
+	var syncMgr *coreauth.Manager
 
 	builder = builder.WithHooks(cliproxy.Hooks{
 		OnAfterStart: func(svc *cliproxy.Service) {
 			mgr := svc.CoreManager()
+			syncMgr = mgr
 
 			// Inject manager into hook and scheduler
 			if capturedHook != nil && mgr != nil {
@@ -136,6 +141,13 @@ func StartService(cfg *config.Config, configPath string, localPassword string) {
 			}
 
 			log.Info("persistence: keepalive and persistence initialised")
+		},
+		// OnAfterInitialSync fires once the watcher has completed its first full auth sync,
+		// guaranteeing codex/claude API key auths are present in the manager.
+		OnAfterInitialSync: func() {
+			if capturedDB != nil && syncMgr != nil {
+				restoreSkippedRelays(capturedDB, syncMgr)
+			}
 		},
 	})
 
@@ -301,5 +313,42 @@ func persistPinnedAuths(db *sql.DB, pinned map[string]string) {
 	}
 	if err := persistence.SetSetting(db, pinnedAuthsSettingKey, string(data)); err != nil {
 		log.Warnf("persistence: failed to save pinned_auths: %v", err)
+	}
+}
+
+func restoreSkippedRelays(db *sql.DB, mgr *coreauth.Manager) {
+	val, err := persistence.GetSetting(db, "skipped_relays")
+	if err != nil || val == "" {
+		return
+	}
+	var indexes []string
+	if err := json.Unmarshal([]byte(val), &indexes); err != nil {
+		log.Warnf("persistence: failed to parse skipped_relays: %v", err)
+		return
+	}
+	skipSet := make(map[string]bool, len(indexes))
+	for _, idx := range indexes {
+		skipSet[idx] = true
+	}
+	restored := 0
+	for _, a := range mgr.List() {
+		if a == nil {
+			continue
+		}
+		idx := strings.TrimSpace(a.Index)
+		if idx == "" {
+			idx = a.EnsureIndex()
+		}
+		if !skipSet[idx] {
+			continue
+		}
+		updated := a.Clone()
+		updated.Disabled = true
+		if _, err := mgr.Update(context.Background(), updated); err == nil {
+			restored++
+		}
+	}
+	if restored > 0 {
+		log.Infof("persistence: restored %d skipped relay(s)", restored)
 	}
 }

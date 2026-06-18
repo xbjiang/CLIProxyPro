@@ -65,6 +65,10 @@ type Hooks struct {
 	// OnAfterStart is called after the service has started successfully,
 	// providing access to the service instance for additional operations.
 	OnAfterStart func(*Service)
+
+	// OnAfterInitialSync is called after the watcher completes its first full auth sync,
+	// guaranteeing all codex-apikey auths are loaded into the core manager.
+	OnAfterInitialSync func()
 }
 
 // NewBuilder creates a Builder with default dependencies left unset.

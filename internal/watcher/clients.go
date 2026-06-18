@@ -134,6 +134,9 @@ func (w *Watcher) reloadClients(rescanAuth bool, affectedOAuthProviders []string
 	}
 
 	w.refreshAuthState(forceAuthRefresh)
+	w.initialSyncOnce.Do(func() {
+		w.dispatchAuthUpdates([]AuthUpdate{{Action: AuthUpdateActionSyncComplete}})
+	})
 
 	log.Infof("full client load complete - %d clients (%d auth files + %d Gemini API keys + %d Vertex API keys + %d Claude API keys + %d Codex keys + %d OpenAI-compat)",
 		totalNewClients,

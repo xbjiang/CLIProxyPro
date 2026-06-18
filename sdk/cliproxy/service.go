@@ -223,6 +223,10 @@ func (s *Service) handleAuthUpdate(ctx context.Context, update watcher.AuthUpdat
 			return
 		}
 		s.applyCoreAuthRemoval(ctx, id)
+	case watcher.AuthUpdateActionSyncComplete:
+		if s.hooks.OnAfterInitialSync != nil {
+			s.hooks.OnAfterInitialSync()
+		}
 	default:
 		log.Debugf("received unknown auth update action: %v", update.Action)
 	}

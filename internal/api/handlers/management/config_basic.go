@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/persistence"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 	log "github.com/sirupsen/logrus"
@@ -510,6 +511,32 @@ func (h *Handler) PutSkippedRelays(c *gin.Context) {
 			unskipped++
 		}
 	}
+	// Persist skipped state so it survives service restarts
+	if h.persistenceDB != nil {
+		var finalSkipped []string
+		for _, a := range h.authManager.List() {
+			if a == nil || !a.Disabled {
+				continue
+			}
+			if provider != "" && a.Provider != provider {
+				continue
+			}
+			idx := strings.TrimSpace(a.Index)
+			if idx == "" {
+				idx = a.EnsureIndex()
+			}
+			if idx != "" {
+				finalSkipped = append(finalSkipped, idx)
+			}
+		}
+		if finalSkipped == nil {
+			finalSkipped = []string{}
+		}
+		if data, err := json.Marshal(finalSkipped); err == nil {
+			_ = persistence.SetSetting(h.persistenceDB, "skipped_relays", string(data))
+		}
+	}
+
 	c.JSON(200, gin.H{"status": "ok", "skipped": skipped, "unskipped": unskipped})
 }
 
