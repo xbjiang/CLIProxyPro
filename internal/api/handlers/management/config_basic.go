@@ -1,6 +1,7 @@
 package management
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -425,6 +426,91 @@ func (h *Handler) DeletePinnedAccount(c *gin.Context) {
 		}
 	}
 	c.JSON(200, gin.H{"status": "ok"})
+}
+
+// GetSkippedRelays returns the list of auth_indexes that are currently skipped (disabled).
+func (h *Handler) GetSkippedRelays(c *gin.Context) {
+	if h == nil || h.authManager == nil {
+		c.JSON(200, gin.H{"skipped_indexes": []string{}})
+		return
+	}
+	provider := strings.TrimSpace(c.Query("provider"))
+	var skipped []string
+	for _, a := range h.authManager.List() {
+		if a == nil || !a.Disabled {
+			continue
+		}
+		if provider != "" && a.Provider != provider {
+			continue
+		}
+		idx := strings.TrimSpace(a.Index)
+		if idx == "" {
+			idx = a.EnsureIndex()
+		}
+		if idx != "" {
+			skipped = append(skipped, idx)
+		}
+	}
+	if skipped == nil {
+		skipped = []string{}
+	}
+	c.JSON(200, gin.H{"skipped_indexes": skipped})
+}
+
+// PutSkippedRelays sets the skip (disabled) state for relays. Full replacement semantics:
+// only the auth_indexes in the request body will be skipped; all others will be un-skipped.
+func (h *Handler) PutSkippedRelays(c *gin.Context) {
+	if h == nil || h.authManager == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "auth manager not available"})
+		return
+	}
+	var body struct {
+		Provider     string   `json:"provider"`
+		AuthIndexes  []string `json:"auth_indexes"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	provider := strings.TrimSpace(body.Provider)
+	skipSet := make(map[string]bool, len(body.AuthIndexes))
+	for _, idx := range body.AuthIndexes {
+		skipSet[strings.TrimSpace(idx)] = true
+	}
+
+	skipped := 0
+	unskipped := 0
+	for _, a := range h.authManager.List() {
+		if a == nil {
+			continue
+		}
+		if provider != "" && a.Provider != provider {
+			continue
+		}
+		idx := strings.TrimSpace(a.Index)
+		if idx == "" {
+			idx = a.EnsureIndex()
+		}
+		if idx == "" {
+			continue
+		}
+		wantSkip := skipSet[idx]
+		if wantSkip == a.Disabled {
+			continue // already in desired state
+		}
+		// Clone, modify, and update via manager
+		updated := a.Clone()
+		updated.Disabled = wantSkip
+		if _, err := h.authManager.Update(context.Background(), updated); err != nil {
+			continue
+		}
+		if wantSkip {
+			skipped++
+		} else {
+			unskipped++
+		}
+	}
+	c.JSON(200, gin.H{"status": "ok", "skipped": skipped, "unskipped": unskipped})
 }
 
 // Proxy URL

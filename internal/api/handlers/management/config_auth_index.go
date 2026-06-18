@@ -89,12 +89,14 @@ type claudeKeyWithAuthIndex struct {
 	config.ClaudeKey
 	AuthIndex      string             `json:"auth-index,omitempty"`
 	RuntimeStatus  *authRuntimeStatus `json:"runtime_status,omitempty"`
+	Skipped        bool               `json:"skipped,omitempty"`
 }
 
 type codexKeyWithAuthIndex struct {
 	config.CodexKey
 	AuthIndex      string             `json:"auth-index,omitempty"`
 	RuntimeStatus  *authRuntimeStatus `json:"runtime_status,omitempty"`
+	Skipped        bool               `json:"skipped,omitempty"`
 }
 
 type vertexCompatKeyWithAuthIndex struct {
@@ -232,17 +234,20 @@ func (h *Handler) claudeKeysWithAuthIndex() []claudeKeyWithAuthIndex {
 		entry := h.cfg.ClaudeKey[i]
 		var authIndex string
 		var runtimeStatus *authRuntimeStatus
+		var skipped bool
 		if key := strings.TrimSpace(entry.APIKey); key != "" {
 			id, _ := idGen.Next("claude:apikey", key, entry.BaseURL)
 			if e, ok := liveEntries[id]; ok {
 				authIndex = e.Index
 				runtimeStatus = buildRuntimeStatus(e.Auth)
+				skipped = e.Auth.Disabled
 			}
 		}
 		out[i] = claudeKeyWithAuthIndex{
 			ClaudeKey:     entry,
 			AuthIndex:     authIndex,
 			RuntimeStatus: runtimeStatus,
+			Skipped:       skipped,
 		}
 	}
 	return out
@@ -266,17 +271,20 @@ func (h *Handler) codexKeysWithAuthIndex() []codexKeyWithAuthIndex {
 		entry := h.cfg.CodexKey[i]
 		var authIndex string
 		var runtimeStatus *authRuntimeStatus
+		var skipped bool
 		if key := strings.TrimSpace(entry.APIKey); key != "" {
 			id, _ := idGen.Next("codex:apikey", key, entry.BaseURL)
 			if e, ok := liveEntries[id]; ok {
 				authIndex = e.Index
 				runtimeStatus = buildRuntimeStatus(e.Auth)
+				skipped = e.Auth.Disabled
 			}
 		}
 		out[i] = codexKeyWithAuthIndex{
 			CodexKey:      entry,
 			AuthIndex:     authIndex,
 			RuntimeStatus: runtimeStatus,
+			Skipped:       skipped,
 		}
 	}
 	return out

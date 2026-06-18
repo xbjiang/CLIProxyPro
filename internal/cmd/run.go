@@ -184,6 +184,12 @@ func restoreAccountStates(db *sql.DB, mgr *coreauth.Manager) {
 		needUpdate := false
 		authCopy := auth.Clone()
 
+		// Restore disabled (skip) flag
+		if state.Disabled && !auth.Disabled {
+			authCopy.Disabled = true
+			needUpdate = true
+		}
+
 		// Restore next_retry_after if persisted value is still in the future
 		if state.NextRetryAfter != nil && state.NextRetryAfter.After(now) && auth.NextRetryAfter.IsZero() {
 			authCopy.NextRetryAfter = *state.NextRetryAfter

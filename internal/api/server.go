@@ -606,6 +606,9 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/routing/pinned-account", s.mgmt.PutPinnedAccount)
 		mgmt.DELETE("/routing/pinned-account", s.mgmt.DeletePinnedAccount)
 
+		mgmt.GET("/routing/skipped-relays", s.mgmt.GetSkippedRelays)
+		mgmt.PUT("/routing/skipped-relays", s.mgmt.PutSkippedRelays)
+
 		mgmt.GET("/current-account", s.mgmt.GetCurrentAccount)
 
 		// Persistence-backed endpoints (served by Go, no Node.js proxy)
