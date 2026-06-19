@@ -1,0 +1,9 @@
+internal/api/handlers/management/config_auth_index.go
+  ai_agent 91,99,237,244,252,276,283,291
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.17-trip",
+  "base_commit_sha": "6c137d6d1d68fe084ead549295b33be796b52f8d",
+  "prompts": {}
+}
