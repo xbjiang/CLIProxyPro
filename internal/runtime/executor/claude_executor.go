@@ -19,6 +19,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	claudeauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/claude"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/inflight"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor/helps"
@@ -231,6 +232,12 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		AuthValue: authValue,
 	})
 
+	upstreamCtx, upstreamCancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer upstreamCancel()
+	httpReq = httpReq.WithContext(upstreamCtx)
+	inflightID := uuid.New().String()
+	inflight.Global.Register(inflightID, e.Identifier(), authID, baseURL, upstreamCancel)
+	defer inflight.Global.Deregister(inflightID)
 	httpClient := helps.NewUtlsHTTPClient(e.cfg, auth, 0)
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
@@ -416,9 +423,19 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		AuthValue: authValue,
 	})
 
+	inflightID := uuid.New().String()
+	upstreamCtx, upstreamCancel := context.WithCancel(ctx)
+	inflight.Global.Register(inflightID, e.Identifier(), authID, baseURL, upstreamCancel)
+	doTimer := time.AfterFunc(5*time.Minute, func() {
+		inflight.Global.Cancel(inflightID)
+	})
+	httpReq = httpReq.WithContext(upstreamCtx)
 	httpClient := helps.NewUtlsHTTPClient(e.cfg, auth, 0)
 	httpResp, err := httpClient.Do(httpReq)
+	doTimer.Stop()
+	inflight.Global.Deregister(inflightID)
 	if err != nil {
+		upstreamCancel()
 		helps.RecordAPIResponseError(ctx, e.cfg, err)
 		return nil, err
 	}

@@ -617,6 +617,8 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/usage/range", s.mgmt.GetUsageByDateRange)
 		mgmt.GET("/keepalive/status", s.mgmt.GetKeepaliveStatus)
 		mgmt.POST("/keepalive/trigger", s.mgmt.TriggerKeepalive)
+		mgmt.GET("/inflight", s.mgmt.GetInflight)
+		mgmt.DELETE("/inflight/:id", s.mgmt.CancelInflight)
 		mgmt.GET("/usage/per-account-cycles", s.mgmt.GetUsagePerAccountCycles)
 		mgmt.GET("/usage/account-cycle-history", s.mgmt.GetAccountCycleHistory)
 
