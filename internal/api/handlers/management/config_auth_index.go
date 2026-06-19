@@ -88,6 +88,7 @@ type geminiKeyWithAuthIndex struct {
 type claudeKeyWithAuthIndex struct {
 	config.ClaudeKey
 	AuthIndex      string             `json:"auth-index,omitempty"`
+	AuthID         string             `json:"auth_id,omitempty"`
 	RuntimeStatus  *authRuntimeStatus `json:"runtime_status,omitempty"`
 	Skipped        bool               `json:"skipped,omitempty"`
 }
@@ -95,6 +96,7 @@ type claudeKeyWithAuthIndex struct {
 type codexKeyWithAuthIndex struct {
 	config.CodexKey
 	AuthIndex      string             `json:"auth-index,omitempty"`
+	AuthID         string             `json:"auth_id,omitempty"`
 	RuntimeStatus  *authRuntimeStatus `json:"runtime_status,omitempty"`
 	Skipped        bool               `json:"skipped,omitempty"`
 }
@@ -232,13 +234,14 @@ func (h *Handler) claudeKeysWithAuthIndex() []claudeKeyWithAuthIndex {
 	out := make([]claudeKeyWithAuthIndex, len(h.cfg.ClaudeKey))
 	for i := range h.cfg.ClaudeKey {
 		entry := h.cfg.ClaudeKey[i]
-		var authIndex string
+		var authIndex, authID string
 		var runtimeStatus *authRuntimeStatus
 		var skipped bool
 		if key := strings.TrimSpace(entry.APIKey); key != "" {
 			id, _ := idGen.Next("claude:apikey", key, entry.BaseURL)
 			if e, ok := liveEntries[id]; ok {
 				authIndex = e.Index
+				authID = e.Auth.ID
 				runtimeStatus = buildRuntimeStatus(e.Auth)
 				skipped = e.Auth.Disabled
 			}
@@ -246,6 +249,7 @@ func (h *Handler) claudeKeysWithAuthIndex() []claudeKeyWithAuthIndex {
 		out[i] = claudeKeyWithAuthIndex{
 			ClaudeKey:     entry,
 			AuthIndex:     authIndex,
+			AuthID:        authID,
 			RuntimeStatus: runtimeStatus,
 			Skipped:       skipped,
 		}
@@ -269,13 +273,14 @@ func (h *Handler) codexKeysWithAuthIndex() []codexKeyWithAuthIndex {
 	out := make([]codexKeyWithAuthIndex, len(h.cfg.CodexKey))
 	for i := range h.cfg.CodexKey {
 		entry := h.cfg.CodexKey[i]
-		var authIndex string
+		var authIndex, authID string
 		var runtimeStatus *authRuntimeStatus
 		var skipped bool
 		if key := strings.TrimSpace(entry.APIKey); key != "" {
 			id, _ := idGen.Next("codex:apikey", key, entry.BaseURL)
 			if e, ok := liveEntries[id]; ok {
 				authIndex = e.Index
+				authID = e.Auth.ID
 				runtimeStatus = buildRuntimeStatus(e.Auth)
 				skipped = e.Auth.Disabled
 			}
@@ -283,6 +288,7 @@ func (h *Handler) codexKeysWithAuthIndex() []codexKeyWithAuthIndex {
 		out[i] = codexKeyWithAuthIndex{
 			CodexKey:      entry,
 			AuthIndex:     authIndex,
+			AuthID:        authID,
 			RuntimeStatus: runtimeStatus,
 			Skipped:       skipped,
 		}
