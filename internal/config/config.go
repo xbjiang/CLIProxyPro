@@ -448,6 +448,9 @@ type CodexKey struct {
 
 	// ExcludedModels lists model IDs that should be excluded for this provider.
 	ExcludedModels []string `yaml:"excluded-models,omitempty" json:"excluded-models,omitempty"`
+
+	// AggressiveRetry enables immediate retry on 429 without Retry-After header.
+	AggressiveRetry bool `yaml:"aggressive-retry,omitempty" json:"aggressive-retry,omitempty"`
 }
 
 func (k CodexKey) GetAPIKey() string  { return k.APIKey }

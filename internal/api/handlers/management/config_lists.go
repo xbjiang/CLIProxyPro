@@ -951,13 +951,14 @@ func (h *Handler) PutCodexKeys(c *gin.Context) {
 }
 func (h *Handler) PatchCodexKey(c *gin.Context) {
 	type codexKeyPatch struct {
-		APIKey         *string              `json:"api-key"`
-		Prefix         *string              `json:"prefix"`
-		BaseURL        *string              `json:"base-url"`
-		ProxyURL       *string              `json:"proxy-url"`
-		Models         *[]config.CodexModel `json:"models"`
-		Headers        *map[string]string   `json:"headers"`
-		ExcludedModels *[]string            `json:"excluded-models"`
+		APIKey          *string              `json:"api-key"`
+		Prefix          *string              `json:"prefix"`
+		BaseURL         *string              `json:"base-url"`
+		ProxyURL        *string              `json:"proxy-url"`
+		Models          *[]config.CodexModel `json:"models"`
+		Headers         *map[string]string   `json:"headers"`
+		ExcludedModels  *[]string            `json:"excluded-models"`
+		AggressiveRetry *bool                `json:"aggressive-retry"`
 	}
 	var body struct {
 		Index *int           `json:"index"`
@@ -1017,6 +1018,9 @@ func (h *Handler) PatchCodexKey(c *gin.Context) {
 	}
 	if body.Value.ExcludedModels != nil {
 		entry.ExcludedModels = config.NormalizeExcludedModels(*body.Value.ExcludedModels)
+	}
+	if body.Value.AggressiveRetry != nil {
+		entry.AggressiveRetry = *body.Value.AggressiveRetry
 	}
 	normalizeCodexKey(&entry)
 	h.cfg.CodexKey[targetIndex] = entry

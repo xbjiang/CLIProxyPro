@@ -1544,6 +1544,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 	opts = ensureRequestedModelMetadata(opts, routeModel)
 	tried := make(map[string]struct{})
 	attempted := make(map[string]struct{})
+	aggressiveRetryStart := time.Time{}
 	var lastErr error
 	for {
 		if maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
@@ -1600,6 +1601,14 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 				m.MarkResult(execCtx, result)
 				if isRequestInvalidError(errExec) {
 					return cliproxyexecutor.Response{}, errExec
+				}
+				if shouldAggressiveRetry(auth, errExec, &aggressiveRetryStart) {
+					delete(tried, auth.ID)
+					delete(attempted, auth.ID)
+					if errWait := waitForCooldown(ctx, time.Second); errWait != nil {
+						return cliproxyexecutor.Response{}, errWait
+					}
+					break
 				}
 				authErr = errExec
 				continue
@@ -1703,6 +1712,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 	opts = ensureRequestedModelMetadata(opts, routeModel)
 	tried := make(map[string]struct{})
 	attempted := make(map[string]struct{})
+	aggressiveRetryStart := time.Time{}
 	var lastErr error
 	for {
 		if maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
@@ -1749,6 +1759,14 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			}
 			if isRequestInvalidError(errStream) {
 				return nil, errStream
+			}
+			if shouldAggressiveRetry(auth, errStream, &aggressiveRetryStart) {
+				delete(tried, auth.ID)
+				delete(attempted, auth.ID)
+				if errWait := waitForCooldown(ctx, time.Second); errWait != nil {
+					return nil, errWait
+				}
+				continue
 			}
 			lastErr = errStream
 			continue
@@ -2233,6 +2251,28 @@ func waitForCooldown(ctx context.Context, wait time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+const aggressiveRetryMaxDuration = 3 * time.Minute
+
+func shouldAggressiveRetry(auth *Auth, err error, startTime *time.Time) bool {
+	if auth == nil || auth.Attributes == nil {
+		return false
+	}
+	if auth.Attributes["aggressive_retry"] != "true" {
+		return false
+	}
+	if statusCodeFromError(err) != http.StatusTooManyRequests {
+		return false
+	}
+	if retryAfterFromError(err) != nil {
+		return false
+	}
+	now := time.Now()
+	if startTime.IsZero() {
+		*startTime = now
+	}
+	return now.Sub(*startTime) < aggressiveRetryMaxDuration
 }
 
 // MarkResult records an execution result and notifies hooks.
