@@ -1,0 +1,17 @@
+internal/watcher/synthesizer/config.go
+  ai_agent 166-168
+sdk/cliproxy/auth/conductor.go
+  ai_agent 1547,1605-1612,1715,1763-1770,2256-2275
+.gitignore
+  ai_agent 54
+internal/api/handlers/management/config_lists.go
+  ai_agent 954-961,1022-1023
+internal/config/config.go
+  ai_agent 451-453
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.17-trip",
+  "base_commit_sha": "5e55ba2fcf7f7390a3b4583ed9b7bd4a2f0ddbee",
+  "prompts": {}
+}
