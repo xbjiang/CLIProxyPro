@@ -400,6 +400,10 @@ type ClaudeKey struct {
 	// Claude /v1/messages requests. It is disabled by default so upstream seed
 	// changes do not alter the proxy's legacy behavior.
 	ExperimentalCCHSigning bool `yaml:"experimental-cch-signing,omitempty" json:"experimental-cch-signing,omitempty"`
+
+	// HomepageURL is the human-facing homepage for this relay.
+	// Defaults to base-url. Stored so it persists across machines.
+	HomepageURL string `yaml:"homepage-url,omitempty" json:"homepage-url,omitempty"`
 }
 
 func (k ClaudeKey) GetAPIKey() string  { return k.APIKey }
@@ -451,6 +455,10 @@ type CodexKey struct {
 
 	// AggressiveRetry enables immediate retry on 429 without Retry-After header.
 	AggressiveRetry bool `yaml:"aggressive-retry,omitempty" json:"aggressive-retry,omitempty"`
+
+	// HomepageURL is the human-facing homepage for this relay (e.g. https://relay.example.com).
+	// Defaults to base-url with /v1 stripped. Stored so it persists across machines.
+	HomepageURL string `yaml:"homepage-url,omitempty" json:"homepage-url,omitempty"`
 }
 
 func (k CodexKey) GetAPIKey() string  { return k.APIKey }
@@ -536,6 +544,12 @@ type OpenAICompatibility struct {
 
 	// Headers optionally adds extra HTTP headers for requests sent to this provider.
 	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
+
+	// RouteAs specifies which provider pool this entry belongs to (e.g. "claude" or "codex").
+	// When set, the entry's auth.Provider is set to this value so it joins the target pool,
+	// while still using OpenAICompatExecutor (per-auth executor override).
+	// When empty, the entry uses its own name as provider (legacy behavior).
+	RouteAs string `yaml:"route-as,omitempty" json:"route-as,omitempty"`
 }
 
 // OpenAICompatibilityAPIKey represents an API key configuration with optional proxy setting.

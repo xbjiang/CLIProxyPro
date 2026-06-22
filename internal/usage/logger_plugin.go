@@ -90,10 +90,12 @@ type modelStats struct {
 
 // RequestDetail stores the timestamp, latency, and token usage for a single request.
 type RequestDetail struct {
-	Timestamp   time.Time  `json:"timestamp"`
-	LatencyMs   int64      `json:"latency_ms"`
-	Source      string     `json:"source"`
-	AuthIndex   string     `json:"auth_index"`
+	Timestamp time.Time `json:"timestamp"`
+	LatencyMs int64     `json:"latency_ms"`
+	TTFTMs      int64  `json:"ttft_ms,omitempty"`      // time-to-first-token in ms; 0 for non-streaming
+	ServiceTier string `json:"service_tier,omitempty"` // "priority" for /fast tier
+	Source      string `json:"source"`
+	AuthIndex string    `json:"auth_index"`
 	// Provider is the upstream agent that served the request (e.g. "codex" or "claude"),
 	// used by the UI to tag whether usage came from Codex CLI or Claude Code.
 	Provider     string     `json:"provider,omitempty"`
@@ -207,6 +209,8 @@ func (s *RequestStatistics) Record(ctx context.Context, record coreusage.Record)
 	s.updateAPIStats(stats, modelName, RequestDetail{
 		Timestamp:    timestamp,
 		LatencyMs:    normaliseLatency(record.Latency),
+		TTFTMs:       record.TTFTMs,
+		ServiceTier:  record.ServiceTier,
 		Source:       record.Source,
 		AuthIndex:    record.AuthIndex,
 		Provider:     strings.ToLower(strings.TrimSpace(record.Provider)),

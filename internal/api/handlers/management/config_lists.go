@@ -314,6 +314,7 @@ func (h *Handler) PatchClaudeKey(c *gin.Context) {
 		Models         *[]config.ClaudeModel `json:"models"`
 		Headers        *map[string]string    `json:"headers"`
 		ExcludedModels *[]string             `json:"excluded-models"`
+		HomepageURL    *string               `json:"homepage-url"`
 	}
 	var body struct {
 		Index *int            `json:"index"`
@@ -366,6 +367,9 @@ func (h *Handler) PatchClaudeKey(c *gin.Context) {
 	}
 	if body.Value.ExcludedModels != nil {
 		entry.ExcludedModels = config.NormalizeExcludedModels(*body.Value.ExcludedModels)
+	}
+	if body.Value.HomepageURL != nil {
+		entry.HomepageURL = strings.TrimSpace(*body.Value.HomepageURL)
 	}
 	normalizeClaudeKey(&entry)
 	h.cfg.ClaudeKey[targetIndex] = entry
@@ -959,6 +963,7 @@ func (h *Handler) PatchCodexKey(c *gin.Context) {
 		Headers         *map[string]string   `json:"headers"`
 		ExcludedModels  *[]string            `json:"excluded-models"`
 		AggressiveRetry *bool                `json:"aggressive-retry"`
+		HomepageURL     *string              `json:"homepage-url"`
 	}
 	var body struct {
 		Index *int           `json:"index"`
@@ -1021,6 +1026,9 @@ func (h *Handler) PatchCodexKey(c *gin.Context) {
 	}
 	if body.Value.AggressiveRetry != nil {
 		entry.AggressiveRetry = *body.Value.AggressiveRetry
+	}
+	if body.Value.HomepageURL != nil {
+		entry.HomepageURL = strings.TrimSpace(*body.Value.HomepageURL)
 	}
 	normalizeCodexKey(&entry)
 	h.cfg.CodexKey[targetIndex] = entry
@@ -1121,6 +1129,7 @@ func normalizeClaudeKey(entry *config.ClaudeKey) {
 	entry.APIKey = strings.TrimSpace(entry.APIKey)
 	entry.BaseURL = strings.TrimSpace(entry.BaseURL)
 	entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
+	entry.HomepageURL = strings.TrimSpace(entry.HomepageURL)
 	entry.Headers = config.NormalizeHeaders(entry.Headers)
 	entry.ExcludedModels = config.NormalizeExcludedModels(entry.ExcludedModels)
 	if len(entry.Models) == 0 {
@@ -1147,6 +1156,7 @@ func normalizeCodexKey(entry *config.CodexKey) {
 	entry.Prefix = strings.TrimSpace(entry.Prefix)
 	entry.BaseURL = strings.TrimSpace(entry.BaseURL)
 	entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
+	entry.HomepageURL = strings.TrimSpace(entry.HomepageURL)
 	entry.Headers = config.NormalizeHeaders(entry.Headers)
 	entry.ExcludedModels = config.NormalizeExcludedModels(entry.ExcludedModels)
 	if len(entry.Models) == 0 {

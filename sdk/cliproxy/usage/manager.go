@@ -10,16 +10,18 @@ import (
 
 // Record contains the usage statistics captured for a single provider request.
 type Record struct {
-	Provider    string
-	Model       string
-	APIKey      string
-	AuthID      string
-	AuthIndex   string
-	Source      string
-	RequestedAt time.Time
-	Latency     time.Duration
-	Failed      bool
-	Detail      Detail
+	Provider     string
+	Model        string
+	APIKey       string
+	AuthID       string
+	AuthIndex    string
+	Source       string
+	RequestedAt  time.Time
+	Latency      time.Duration
+	TTFTMs       int64  // time-to-first-token in milliseconds; 0 for non-streaming requests
+	ServiceTier  string // "priority" for /fast tier; empty = standard
+	Failed       bool
+	Detail       Detail
 	StatusCode   int
 	ErrorMessage string
 }

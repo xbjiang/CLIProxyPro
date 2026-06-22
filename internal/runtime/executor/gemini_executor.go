@@ -315,6 +315,7 @@ func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		scanner := bufio.NewScanner(httpResp.Body)
 		scanner.Buffer(nil, streamScannerBuffer)
 		var param any
+		firstChunk := true
 		for scanner.Scan() {
 			line := scanner.Bytes()
 			helps.AppendAPIResponseChunk(ctx, e.cfg, line)
@@ -322,6 +323,10 @@ func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 			payload := helps.JSONPayload(filtered)
 			if len(payload) == 0 {
 				continue
+			}
+			if firstChunk {
+				reporter.SetTTFT()
+				firstChunk = false
 			}
 			if detail, ok := helps.ParseGeminiStreamUsage(payload); ok {
 				reporter.Publish(ctx, detail)

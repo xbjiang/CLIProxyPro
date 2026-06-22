@@ -193,5 +193,30 @@ CREATE INDEX IF NOT EXISTS idx_arh_auth_index ON account_reset_history(auth_inde
 		_, _ = db.Exec(`ALTER TABLE usage_records ADD COLUMN error_message TEXT DEFAULT ''`)
 	}
 
+	// Migration: add service_tier column to usage_records
+	var stExists bool
+	if qErr := db.QueryRow(`
+		SELECT COUNT(*) > 0 FROM pragma_table_info('usage_records')
+		WHERE name = 'service_tier'
+	`).Scan(&stExists); qErr == nil && !stExists {
+		_, _ = db.Exec(`ALTER TABLE usage_records ADD COLUMN service_tier TEXT DEFAULT ''`)
+	}
+
+	// Migration: add latency_ms and ttft_ms columns to usage_records
+	var lmExists bool
+	if qErr := db.QueryRow(`
+		SELECT COUNT(*) > 0 FROM pragma_table_info('usage_records')
+		WHERE name = 'latency_ms'
+	`).Scan(&lmExists); qErr == nil && !lmExists {
+		_, _ = db.Exec(`ALTER TABLE usage_records ADD COLUMN latency_ms INTEGER DEFAULT 0`)
+	}
+	var ttftExists bool
+	if qErr := db.QueryRow(`
+		SELECT COUNT(*) > 0 FROM pragma_table_info('usage_records')
+		WHERE name = 'ttft_ms'
+	`).Scan(&ttftExists); qErr == nil && !ttftExists {
+		_, _ = db.Exec(`ALTER TABLE usage_records ADD COLUMN ttft_ms INTEGER DEFAULT 0`)
+	}
+
 	return nil
 }

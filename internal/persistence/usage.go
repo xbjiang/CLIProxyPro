@@ -22,12 +22,16 @@ func InsertUsageRecord(db *sql.DB, hash string, rec coreusage.Record, isKeepaliv
 	if rec.Failed {
 		fv = 1
 	}
+	latencyMs := rec.Latency.Milliseconds()
+	if latencyMs < 0 {
+		latencyMs = 0
+	}
 	_, err := db.Exec(`
 		INSERT OR IGNORE INTO usage_records
 			(dedup_hash, api_key, model, timestamp, source, auth_index, auth_id, provider,
 			 input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens, failed, is_keepalive,
-			 status_code, error_message)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			 status_code, error_message, latency_ms, ttft_ms, service_tier)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		hash,
 		rec.APIKey,
 		rec.Model,
@@ -45,6 +49,9 @@ func InsertUsageRecord(db *sql.DB, hash string, rec coreusage.Record, isKeepaliv
 		kv,
 		rec.StatusCode,
 		rec.ErrorMessage,
+		latencyMs,
+		rec.TTFTMs,
+		rec.ServiceTier,
 	)
 	return err
 }
@@ -238,6 +245,9 @@ type UsageRecord struct {
 	TotalTokens     int64  `json:"total_tokens"`
 	StatusCode      int    `json:"status_code"`
 	ErrorMessage    string `json:"error_message,omitempty"`
+	LatencyMs       int64  `json:"latency_ms,omitempty"`
+	TTFTMs          int64  `json:"ttft_ms,omitempty"`
+	ServiceTier     string `json:"service_tier,omitempty"`
 }
 
 // AccountCycleStat represents per-account usage within its current quota cycle.
@@ -554,7 +564,8 @@ func QueryByDateRange(ctx context.Context, db *sql.DB, startDate, endDate string
 	rows3, err := db.QueryContext(ctx, `
 		SELECT timestamp, COALESCE(source,''), model, COALESCE(provider,''), failed, is_keepalive,
 			   input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens,
-			   status_code, error_message
+			   status_code, error_message,
+			   COALESCE(latency_ms, 0), COALESCE(ttft_ms, 0), COALESCE(service_tier, '')
 		FROM usage_records
 		WHERE DATE(timestamp, 'localtime') >= ? AND DATE(timestamp, 'localtime') <= ?
 		ORDER BY timestamp DESC LIMIT 1000`,
@@ -570,7 +581,8 @@ func QueryByDateRange(ctx context.Context, db *sql.DB, startDate, endDate string
 		var failedInt, keepaliveInt int
 		if err := rows3.Scan(&rec.Timestamp, &rec.Source, &rec.Model, &rec.Provider, &failedInt, &keepaliveInt,
 			&rec.InputTokens, &rec.OutputTokens, &rec.ReasoningTokens, &rec.CachedTokens, &rec.TotalTokens,
-			&rec.StatusCode, &rec.ErrorMessage); err != nil {
+			&rec.StatusCode, &rec.ErrorMessage,
+			&rec.LatencyMs, &rec.TTFTMs, &rec.ServiceTier); err != nil {
 			return nil, nil, err
 		}
 		rec.Failed = failedInt == 1

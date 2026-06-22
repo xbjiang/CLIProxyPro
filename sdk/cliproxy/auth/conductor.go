@@ -189,6 +189,12 @@ type Manager struct {
 	// onPinnedChange is called after any pin mutation with the full map snapshot.
 	// Used to persist pin state to SQLite. Protected by pinnedAuthsMu (called under lock).
 	onPinnedChange func(map[string]string)
+
+	// authExecutors stores per-auth executor overrides.
+	// When an auth is synthesized from openai-compatibility with route-as,
+	// its executor is stored here so pickNext uses OpenAICompatExecutor
+	// instead of the pool's default executor. Protected by mu.
+	authExecutors map[string]ProviderExecutor
 }
 
 // NewManager constructs a manager with optional custom selector and hook.
@@ -1266,6 +1272,33 @@ func (m *Manager) RegisterExecutor(executor ProviderExecutor) {
 	if closer, ok := replaced.(ExecutionSessionCloser); ok && closer != nil {
 		closer.CloseExecutionSession(CloseAllExecutionSessionsID)
 	}
+}
+
+// RegisterAuthExecutor stores a per-auth executor override.
+// When pickNext selects an auth that has a per-auth executor, it uses this
+// executor instead of the pool's default (m.executors[provider]).
+// This enables openai-compatibility entries with route-as to join a pool
+// (e.g. "claude") while still using OpenAICompatExecutor for actual HTTP calls.
+func (m *Manager) RegisterAuthExecutor(authID string, exec ProviderExecutor) {
+	if authID == "" || exec == nil {
+		return
+	}
+	m.mu.Lock()
+	if m.authExecutors == nil {
+		m.authExecutors = make(map[string]ProviderExecutor)
+	}
+	m.authExecutors[authID] = exec
+	m.mu.Unlock()
+}
+
+// ClearAuthExecutor removes the per-auth executor override for the given auth.
+func (m *Manager) ClearAuthExecutor(authID string) {
+	if authID == "" {
+		return
+	}
+	m.mu.Lock()
+	delete(m.authExecutors, authID)
+	m.mu.Unlock()
 }
 
 // UnregisterExecutor removes the executor associated with the provider key.
@@ -3012,6 +3045,10 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 	if pinnedAuthID != "" {
 		auth := candidates[0]
 		authCopy := auth.Clone()
+		// Check per-auth executor override (e.g. openai-compat with route-as)
+		if override, ok := m.authExecutors[auth.ID]; ok {
+			executor = override
+		}
 		m.mu.RUnlock()
 		if !auth.indexAssigned {
 			m.mu.Lock()
@@ -3038,6 +3075,10 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 		return nil, nil, &Error{Code: "auth_not_found", Message: "selector returned no auth"}
 	}
 	authCopy := selected.Clone()
+	// Check per-auth executor override (e.g. openai-compat with route-as)
+	if override, ok := m.authExecutors[selected.ID]; ok {
+		executor = override
+	}
 	m.mu.RUnlock()
 	if !selected.indexAssigned {
 		m.mu.Lock()
@@ -3070,8 +3111,9 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cli
 		}
 		m.mu.RUnlock()
 	}
-	executor, okExecutor := m.Executor(provider)
-	if !okExecutor {
+	// Get pool default executor (fallback if no per-auth override)
+	poolExecutor, okPoolExecutor := m.Executor(provider)
+	if !okPoolExecutor {
 		return nil, nil, &Error{Code: "executor_not_found", Message: "executor not registered"}
 	}
 	selected, errPick := m.scheduler.pickSingle(ctx, provider, model, opts, tried)
@@ -3084,6 +3126,15 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cli
 	}
 	if selected == nil {
 		return nil, nil, &Error{Code: "auth_not_found", Message: "selector returned no auth"}
+	}
+	// Check per-auth executor override first, then pool default
+	executor, okExecutor := m.authExecutors[selected.ID]
+	if !okExecutor {
+		executor = poolExecutor
+		okExecutor = okPoolExecutor
+	}
+	if !okExecutor {
+		return nil, nil, &Error{Code: "executor_not_found", Message: "executor not registered"}
 	}
 	authCopy := selected.Clone()
 	if !selected.indexAssigned {
@@ -3143,8 +3194,11 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 		if _, used := tried[candidate.ID]; used {
 			continue
 		}
+		// Accept candidate if pool has a default executor OR has a per-auth executor override
 		if _, ok := m.executors[providerKey]; !ok {
-			continue
+			if _, hasOverride := m.authExecutors[candidate.ID]; !hasOverride {
+				continue
+			}
 		}
 		if pinnedAuthID == "" {
 			// Check if candidate is pinned for its provider
@@ -3173,7 +3227,11 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 	if pinnedAuthID != "" {
 		auth := candidates[0]
 		providerKey := strings.TrimSpace(strings.ToLower(auth.Provider))
-		exec, okExec := m.executors[providerKey]
+		// Check per-auth executor override first, then pool default
+		exec, okExec := m.authExecutors[auth.ID]
+		if !okExec {
+			exec, okExec = m.executors[providerKey]
+		}
 		if !okExec {
 			m.mu.RUnlock()
 			return nil, nil, "", &Error{Code: "executor_not_found", Message: "executor not registered"}
@@ -3205,7 +3263,11 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 		return nil, nil, "", &Error{Code: "auth_not_found", Message: "selector returned no auth"}
 	}
 	providerKey := strings.TrimSpace(strings.ToLower(selected.Provider))
-	executor, okExecutor := m.executors[providerKey]
+	// Check per-auth executor override first, then pool default
+	executor, okExecutor := m.authExecutors[selected.ID]
+	if !okExecutor {
+		executor, okExecutor = m.executors[providerKey]
+	}
 	if !okExecutor {
 		m.mu.RUnlock()
 		return nil, nil, "", &Error{Code: "executor_not_found", Message: "executor not registered"}
@@ -3282,7 +3344,11 @@ func (m *Manager) pickNextMixed(ctx context.Context, providers []string, model s
 	if selected == nil {
 		return nil, nil, "", &Error{Code: "auth_not_found", Message: "selector returned no auth"}
 	}
-	executor, okExecutor := m.Executor(providerKey)
+	// Check per-auth executor override first, then pool default
+	executor, okExecutor := m.authExecutors[selected.ID]
+	if !okExecutor {
+		executor, okExecutor = m.Executor(providerKey)
+	}
 	if !okExecutor {
 		return nil, nil, "", &Error{Code: "executor_not_found", Message: "executor not registered"}
 	}

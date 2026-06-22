@@ -202,6 +202,13 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 		if providerName == "" {
 			providerName = "openai-compatibility"
 		}
+		// RouteAs: which provider pool this entry joins (e.g. "claude", "codex").
+		// When set, auth.Provider = routeAs so it enters the target pool.
+		routeAs := strings.TrimSpace(strings.ToLower(compat.RouteAs))
+		authProvider := providerName
+		if routeAs != "" {
+			authProvider = routeAs
+		}
 		base := strings.TrimSpace(compat.BaseURL)
 
 		// Handle new APIKeyEntries format (preferred)
@@ -213,10 +220,12 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 			idKind := fmt.Sprintf("openai-compatibility:%s", providerName)
 			id, token := idGen.Next(idKind, key, base, proxyURL)
 			attrs := map[string]string{
-				"source":       fmt.Sprintf("config:%s[%s]", providerName, token),
-				"base_url":     base,
-				"compat_name":  compat.Name,
-				"provider_key": providerName,
+				"source":          fmt.Sprintf("config:%s[%s]", providerName, token),
+				"base_url":        base,
+				"compat_name":     compat.Name,
+				"provider_key":    providerName,
+				"openai_compat":   "true",
+				"compat_provider": providerName,
 			}
 			if compat.Priority != 0 {
 				attrs["priority"] = strconv.Itoa(compat.Priority)
@@ -230,7 +239,7 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 			addConfigHeadersToAttrs(compat.Headers, attrs)
 			a := &coreauth.Auth{
 				ID:         id,
-				Provider:   providerName,
+				Provider:   authProvider,
 				Label:      compat.Name,
 				Prefix:     prefix,
 				Status:     coreauth.StatusActive,
@@ -247,10 +256,12 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 			idKind := fmt.Sprintf("openai-compatibility:%s", providerName)
 			id, token := idGen.Next(idKind, base)
 			attrs := map[string]string{
-				"source":       fmt.Sprintf("config:%s[%s]", providerName, token),
-				"base_url":     base,
-				"compat_name":  compat.Name,
-				"provider_key": providerName,
+				"source":          fmt.Sprintf("config:%s[%s]", providerName, token),
+				"base_url":        base,
+				"compat_name":     compat.Name,
+				"provider_key":    providerName,
+				"openai_compat":   "true",
+				"compat_provider": providerName,
 			}
 			if compat.Priority != 0 {
 				attrs["priority"] = strconv.Itoa(compat.Priority)
@@ -261,7 +272,7 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 			addConfigHeadersToAttrs(compat.Headers, attrs)
 			a := &coreauth.Auth{
 				ID:         id,
-				Provider:   providerName,
+				Provider:   authProvider,
 				Label:      compat.Name,
 				Prefix:     prefix,
 				Status:     coreauth.StatusActive,

@@ -279,6 +279,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		scanner := bufio.NewScanner(httpResp.Body)
 		scanner.Buffer(nil, 52_428_800) // 50MB
 		var param any
+		firstChunk := true
 		for scanner.Scan() {
 			line := scanner.Bytes()
 			helps.AppendAPIResponseChunk(ctx, e.cfg, line)
@@ -291,6 +292,11 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 
 			if !bytes.HasPrefix(line, []byte("data:")) {
 				continue
+			}
+
+			if firstChunk {
+				reporter.SetTTFT()
+				firstChunk = false
 			}
 
 			// OpenAI-compatible streams are SSE: lines typically prefixed with "data: ".

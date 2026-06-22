@@ -446,7 +446,11 @@ func (s *Service) ensureExecutorsForAuthWithMode(a *coreauth.Auth, forceReplace 
 		if compatProviderKey == "" {
 			compatProviderKey = "openai-compatibility"
 		}
-		s.coreManager.RegisterExecutor(executor.NewOpenAICompatExecutor(compatProviderKey, s.cfg))
+		exec := executor.NewOpenAICompatExecutor(compatProviderKey, s.cfg)
+		s.coreManager.RegisterExecutor(exec)
+		// Per-auth executor override: when this auth has route-as set,
+		// pickNext will use OpenAICompatExecutor instead of the pool's default.
+		s.coreManager.RegisterAuthExecutor(a.ID, exec)
 		return
 	}
 	switch strings.ToLower(a.Provider) {
@@ -1007,6 +1011,15 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 				if v := strings.TrimSpace(a.Attributes["provider_key"]); v != "" {
 					providerKey = strings.ToLower(v)
 					isCompatAuth = true
+				}
+			}
+			// When openai_compat is set (route-as configured), register models
+			// under the pool provider (auth.Provider) so GetProviderName() returns
+			// the pool provider, enabling cross-pool routing.
+			if a.Attributes != nil && a.Attributes["openai_compat"] == "true" {
+				poolProvider := strings.TrimSpace(strings.ToLower(a.Provider))
+				if poolProvider != "" {
+					providerKey = poolProvider
 				}
 			}
 			for i := range s.cfg.OpenAICompatibility {

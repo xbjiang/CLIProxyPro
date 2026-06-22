@@ -23,6 +23,8 @@ type UsageReporter struct {
 	apiKey       string
 	source       string
 	requestedAt  time.Time
+	ttftAt       time.Time // time of first token received; zero for non-streaming
+	serviceTier  string    // "priority" for /fast tier; empty = standard
 	once         sync.Once
 	statusCode   int
 	errorMessage string
@@ -49,6 +51,22 @@ func (r *UsageReporter) SetStatusCode(code int) {
 		return
 	}
 	r.statusCode = code
+}
+
+// SetServiceTier records the service tier from the request payload (e.g. "priority" for /fast).
+func (r *UsageReporter) SetServiceTier(tier string) {
+	if r != nil {
+		r.serviceTier = tier
+	}
+}
+
+// SetTTFT records the time of the first streaming token received.
+// Only the first call has effect; subsequent calls are no-ops.
+func (r *UsageReporter) SetTTFT() {
+	if r == nil || !r.ttftAt.IsZero() {
+		return
+	}
+	r.ttftAt = time.Now()
 }
 
 func (r *UsageReporter) Publish(ctx context.Context, detail usage.Detail) {
@@ -112,6 +130,8 @@ func (r *UsageReporter) buildRecord(detail usage.Detail, failed bool, statusCode
 		AuthIndex:    r.authIndex,
 		RequestedAt:  r.requestedAt,
 		Latency:      r.latency(),
+		TTFTMs:       r.ttftMs(),
+		ServiceTier:  r.serviceTier,
 		Failed:       failed,
 		Detail:       detail,
 		StatusCode:   statusCode,
@@ -128,6 +148,17 @@ func (r *UsageReporter) latency() time.Duration {
 		return 0
 	}
 	return latency
+}
+
+func (r *UsageReporter) ttftMs() int64 {
+	if r == nil || r.ttftAt.IsZero() || r.requestedAt.IsZero() {
+		return 0
+	}
+	ms := r.ttftAt.Sub(r.requestedAt).Milliseconds()
+	if ms < 0 {
+		return 0
+	}
+	return ms
 }
 
 func APIKeyFromContext(ctx context.Context) string {
