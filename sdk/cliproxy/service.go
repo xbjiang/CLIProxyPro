@@ -1056,6 +1056,8 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 							providerKey = "openai-compatibility"
 						}
 						s.registerResolvedModelsForAuth(a, providerKey, applyModelPrefixes(ms, a.Prefix, s.cfg.ForceModelPrefix))
+						// Trigger asynchronous upstream model discovery for openai-compat entries
+						s.asyncDiscoverUpstreamModels(a, providerKey, nil)
 					} else {
 						// Ensure stale registrations are cleared when model list becomes empty.
 						GlobalModelRegistry().UnregisterClient(a.ID)
