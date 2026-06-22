@@ -119,6 +119,8 @@ type openAICompatibilityWithAuthIndex struct {
 	APIKeyEntries []openAICompatibilityAPIKeyWithAuthIndex `json:"api-key-entries,omitempty"`
 	Models        []config.OpenAICompatibilityModel        `json:"models,omitempty"`
 	Headers       map[string]string                        `json:"headers,omitempty"`
+	DisplayName   string                                   `json:"display-name,omitempty"`
+	Tags          []string                                 `json:"tags,omitempty"`
 	AuthIndex     string                                   `json:"auth-index,omitempty"`
 }
 
@@ -346,13 +348,15 @@ func (h *Handler) openAICompatibilityWithAuthIndex() []openAICompatibilityWithAu
 		idKind := fmt.Sprintf("openai-compatibility:%s", providerName)
 
 		response := openAICompatibilityWithAuthIndex{
-			Name:      entry.Name,
-			Priority:  entry.Priority,
-			Prefix:    entry.Prefix,
-			BaseURL:   entry.BaseURL,
-			Models:    entry.Models,
-			Headers:   entry.Headers,
-			AuthIndex: "",
+			Name:        entry.Name,
+			Priority:    entry.Priority,
+			Prefix:      entry.Prefix,
+			BaseURL:     entry.BaseURL,
+			Models:      entry.Models,
+			Headers:     entry.Headers,
+			DisplayName: entry.DisplayName,
+			Tags:        entry.Tags,
+			AuthIndex:   "",
 		}
 		if len(entry.APIKeyEntries) == 0 {
 			id, _ := idGen.Next(idKind, entry.BaseURL)

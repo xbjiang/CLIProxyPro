@@ -315,6 +315,8 @@ func (h *Handler) PatchClaudeKey(c *gin.Context) {
 		Headers        *map[string]string    `json:"headers"`
 		ExcludedModels *[]string             `json:"excluded-models"`
 		HomepageURL    *string               `json:"homepage-url"`
+		Name           *string               `json:"name"`
+		Tags           *[]string             `json:"tags"`
 	}
 	var body struct {
 		Index *int            `json:"index"`
@@ -370,6 +372,18 @@ func (h *Handler) PatchClaudeKey(c *gin.Context) {
 	}
 	if body.Value.HomepageURL != nil {
 		entry.HomepageURL = strings.TrimSpace(*body.Value.HomepageURL)
+	}
+	if body.Value.Name != nil {
+		entry.Name = strings.TrimSpace(*body.Value.Name)
+	}
+	if body.Value.Tags != nil {
+		normalized := make([]string, 0, len(*body.Value.Tags))
+		for _, t := range *body.Value.Tags {
+			if trimmed := strings.TrimSpace(t); trimmed != "" {
+				normalized = append(normalized, trimmed)
+			}
+		}
+		entry.Tags = normalized
 	}
 	normalizeClaudeKey(&entry)
 	h.cfg.ClaudeKey[targetIndex] = entry
@@ -472,6 +486,8 @@ func (h *Handler) PatchOpenAICompat(c *gin.Context) {
 		APIKeyEntries *[]config.OpenAICompatibilityAPIKey `json:"api-key-entries"`
 		Models        *[]config.OpenAICompatibilityModel  `json:"models"`
 		Headers       *map[string]string                  `json:"headers"`
+		DisplayName   *string                             `json:"display-name"`
+		Tags          *[]string                           `json:"tags"`
 	}
 	var body struct {
 		Name  *string            `json:"name"`
@@ -528,6 +544,18 @@ func (h *Handler) PatchOpenAICompat(c *gin.Context) {
 	}
 	if body.Value.Headers != nil {
 		entry.Headers = config.NormalizeHeaders(*body.Value.Headers)
+	}
+	if body.Value.DisplayName != nil {
+		entry.DisplayName = strings.TrimSpace(*body.Value.DisplayName)
+	}
+	if body.Value.Tags != nil {
+		normalized := make([]string, 0, len(*body.Value.Tags))
+		for _, t := range *body.Value.Tags {
+			if trimmed := strings.TrimSpace(t); trimmed != "" {
+				normalized = append(normalized, trimmed)
+			}
+		}
+		entry.Tags = normalized
 	}
 	normalizeOpenAICompatibilityEntry(&entry)
 	h.cfg.OpenAICompatibility[targetIndex] = entry
@@ -964,6 +992,8 @@ func (h *Handler) PatchCodexKey(c *gin.Context) {
 		ExcludedModels  *[]string            `json:"excluded-models"`
 		AggressiveRetry *bool                `json:"aggressive-retry"`
 		HomepageURL     *string              `json:"homepage-url"`
+		Name            *string              `json:"name"`
+		Tags            *[]string            `json:"tags"`
 	}
 	var body struct {
 		Index *int           `json:"index"`
@@ -1029,6 +1059,18 @@ func (h *Handler) PatchCodexKey(c *gin.Context) {
 	}
 	if body.Value.HomepageURL != nil {
 		entry.HomepageURL = strings.TrimSpace(*body.Value.HomepageURL)
+	}
+	if body.Value.Name != nil {
+		entry.Name = strings.TrimSpace(*body.Value.Name)
+	}
+	if body.Value.Tags != nil {
+		normalized := make([]string, 0, len(*body.Value.Tags))
+		for _, t := range *body.Value.Tags {
+			if trimmed := strings.TrimSpace(t); trimmed != "" {
+				normalized = append(normalized, trimmed)
+			}
+		}
+		entry.Tags = normalized
 	}
 	normalizeCodexKey(&entry)
 	h.cfg.CodexKey[targetIndex] = entry

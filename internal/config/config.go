@@ -404,6 +404,13 @@ type ClaudeKey struct {
 	// HomepageURL is the human-facing homepage for this relay.
 	// Defaults to base-url. Stored so it persists across machines.
 	HomepageURL string `yaml:"homepage-url,omitempty" json:"homepage-url,omitempty"`
+
+	// Name is a human-readable display name for this relay, used to identify it in the management panel.
+	// Does not affect routing or authentication.
+	Name string `yaml:"name,omitempty" json:"name,omitempty"`
+
+	// Tags is a list of free-form labels for organizing and filtering relays in the management panel.
+	Tags []string `yaml:"tags,omitempty" json:"tags,omitempty"`
 }
 
 func (k ClaudeKey) GetAPIKey() string  { return k.APIKey }
@@ -459,6 +466,13 @@ type CodexKey struct {
 	// HomepageURL is the human-facing homepage for this relay (e.g. https://relay.example.com).
 	// Defaults to base-url with /v1 stripped. Stored so it persists across machines.
 	HomepageURL string `yaml:"homepage-url,omitempty" json:"homepage-url,omitempty"`
+
+	// Name is a human-readable display name for this relay, used to identify it in the management panel.
+	// Does not affect routing or authentication.
+	Name string `yaml:"name,omitempty" json:"name,omitempty"`
+
+	// Tags is a list of free-form labels for organizing and filtering relays in the management panel.
+	Tags []string `yaml:"tags,omitempty" json:"tags,omitempty"`
 }
 
 func (k CodexKey) GetAPIKey() string  { return k.APIKey }
@@ -550,6 +564,14 @@ type OpenAICompatibility struct {
 	// while still using OpenAICompatExecutor (per-auth executor override).
 	// When empty, the entry uses its own name as provider (legacy behavior).
 	RouteAs string `yaml:"route-as,omitempty" json:"route-as,omitempty"`
+
+	// DisplayName is a human-readable label for this provider in the management panel.
+	// Unlike Name (which is the identity key), this can be freely edited.
+	// Falls back to Name in the UI if empty.
+	DisplayName string `yaml:"display-name,omitempty" json:"display-name,omitempty"`
+
+	// Tags is a list of free-form labels for organizing and filtering relays in the management panel.
+	Tags []string `yaml:"tags,omitempty" json:"tags,omitempty"`
 }
 
 // OpenAICompatibilityAPIKey represents an API key configuration with optional proxy setting.
