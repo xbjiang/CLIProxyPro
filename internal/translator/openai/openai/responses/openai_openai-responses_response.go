@@ -44,8 +44,9 @@ type oaiToResponsesState struct {
 	MsgContentAdded map[int]bool // whether response.content_part.added emitted for message
 	MsgItemDone     map[int]bool // whether message done events were emitted
 	// function item done state
-	FuncArgsDone map[string]bool
-	FuncItemDone map[string]bool
+	FuncArgsDone  map[string]bool
+	FuncItemDone  map[string]bool
+	FuncItemAdded map[string]bool // whether response.output_item.added emitted for function_call
 	// usage aggregation
 	PromptTokens     int64
 	CachedTokens     int64
@@ -60,6 +61,41 @@ var responseIDCounter uint64
 
 func emitRespEvent(event string, payload []byte) []byte {
 	return translatorcommon.SSEEventData(event, payload)
+}
+
+// flushPendingFunctionCall emits the deferred response.output_item.added event
+// for a function_call whose name was not available when the call_id first arrived.
+// It also replays any buffered arguments as a single function_call_arguments.delta.
+// This mirrors the upstream pattern from codex_claude_response.go (commit 34639c3c).
+func flushPendingFunctionCall(out [][]byte, st *oaiToResponsesState, key string, nextSeq func() int) [][]byte {
+	callID := st.FuncCallIDs[key]
+	if callID == "" || st.FuncItemAdded[key] {
+		return out
+	}
+	outputIndex := st.FuncOutputIx[key]
+	name := st.FuncNames[key]
+
+	// 1. Emit response.output_item.added with the now-available name
+	o := []byte(`{"type":"response.output_item.added","sequence_number":0,"output_index":0,"item":{"id":"","type":"function_call","status":"in_progress","arguments":"","call_id":"","name":""}}`)
+	o, _ = sjson.SetBytes(o, "sequence_number", nextSeq())
+	o, _ = sjson.SetBytes(o, "output_index", outputIndex)
+	o, _ = sjson.SetBytes(o, "item.id", fmt.Sprintf("fc_%s", callID))
+	o, _ = sjson.SetBytes(o, "item.call_id", callID)
+	o, _ = sjson.SetBytes(o, "item.name", name)
+	out = append(out, emitRespEvent("response.output_item.added", o))
+	st.FuncItemAdded[key] = true
+
+	// 2. Replay buffered arguments as a single arguments.delta
+	if b := st.FuncArgsBuf[key]; b != nil && b.Len() > 0 {
+		ad := []byte(`{"type":"response.function_call_arguments.delta","sequence_number":0,"item_id":"","output_index":0,"delta":""}`)
+		ad, _ = sjson.SetBytes(ad, "sequence_number", nextSeq())
+		ad, _ = sjson.SetBytes(ad, "item_id", fmt.Sprintf("fc_%s", callID))
+		ad, _ = sjson.SetBytes(ad, "output_index", outputIndex)
+		ad, _ = sjson.SetBytes(ad, "delta", b.String())
+		out = append(out, emitRespEvent("response.function_call_arguments.delta", ad))
+	}
+
+	return out
 }
 
 func buildResponsesCompletedEvent(st *oaiToResponsesState, requestRawJSON []byte, nextSeq func() int) []byte {
@@ -213,6 +249,7 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, 
 			MsgItemDone:     make(map[int]bool),
 			FuncArgsDone:    make(map[string]bool),
 			FuncItemDone:    make(map[string]bool),
+			FuncItemAdded:   make(map[string]bool),
 			Reasonings:      make([]oaiToResponsesStateReasoning, 0),
 		}
 	}
@@ -300,6 +337,7 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, 
 		st.MsgItemDone = make(map[int]bool)
 		st.FuncArgsDone = make(map[string]bool)
 		st.FuncItemDone = make(map[string]bool)
+		st.FuncItemAdded = make(map[string]bool)
 		st.PromptTokens = 0
 		st.CachedTokens = 0
 		st.CompletionTokens = 0
@@ -472,45 +510,48 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, 
 						}
 
 						existingCallID := st.FuncCallIDs[key]
-						effectiveCallID := existingCallID
-						shouldEmitItem := false
 						if existingCallID == "" && newCallID != "" {
-							effectiveCallID = newCallID
 							st.FuncCallIDs[key] = newCallID
 							st.FuncOutputIx[key] = allocOutputIndex()
-							shouldEmitItem = true
-						}
-
-						if shouldEmitItem && effectiveCallID != "" {
-							outputIndex := st.FuncOutputIx[key]
-							o := []byte(`{"type":"response.output_item.added","sequence_number":0,"output_index":0,"item":{"id":"","type":"function_call","status":"in_progress","arguments":"","call_id":"","name":""}}`)
-							o, _ = sjson.SetBytes(o, "sequence_number", nextSeq())
-							o, _ = sjson.SetBytes(o, "output_index", outputIndex)
-							o, _ = sjson.SetBytes(o, "item.id", fmt.Sprintf("fc_%s", effectiveCallID))
-							o, _ = sjson.SetBytes(o, "item.call_id", effectiveCallID)
-							o, _ = sjson.SetBytes(o, "item.name", st.FuncNames[key])
-							out = append(out, emitRespEvent("response.output_item.added", o))
 						}
 
 						if st.FuncArgsBuf[key] == nil {
 							st.FuncArgsBuf[key] = &strings.Builder{}
 						}
 
+						// Buffer arguments while output_item.added is deferred
+						// (name not yet available). They will be flushed as a
+						// single arguments.delta event once the name arrives.
 						if args := tc.Get("function.arguments"); args.Exists() && args.String() != "" {
-							refCallID := st.FuncCallIDs[key]
-							if refCallID == "" {
-								refCallID = newCallID
-							}
-							if refCallID != "" {
-								outputIndex := st.FuncOutputIx[key]
-								ad := []byte(`{"type":"response.function_call_arguments.delta","sequence_number":0,"item_id":"","output_index":0,"delta":""}`)
-								ad, _ = sjson.SetBytes(ad, "sequence_number", nextSeq())
-								ad, _ = sjson.SetBytes(ad, "item_id", fmt.Sprintf("fc_%s", refCallID))
-								ad, _ = sjson.SetBytes(ad, "output_index", outputIndex)
-								ad, _ = sjson.SetBytes(ad, "delta", args.String())
-								out = append(out, emitRespEvent("response.function_call_arguments.delta", ad))
-							}
 							st.FuncArgsBuf[key].WriteString(args.String())
+						}
+
+						// Emit output_item.added once the name is available.
+						// For standard OpenAI providers the name arrives in the
+						// same chunk as the call_id, so this fires immediately.
+						// For providers that delay the name (e.g. Glm5.2), the
+						// emission is deferred until a later chunk provides it.
+						if !st.FuncItemAdded[key] && st.FuncCallIDs[key] != "" && st.FuncNames[key] != "" {
+							out = flushPendingFunctionCall(out, st, key, nextSeq)
+						}
+
+						// Stream argument deltas only after output_item.added.
+						if st.FuncItemAdded[key] {
+							if args := tc.Get("function.arguments"); args.Exists() && args.String() != "" {
+								refCallID := st.FuncCallIDs[key]
+								if refCallID == "" {
+									refCallID = newCallID
+								}
+								if refCallID != "" {
+									outputIndex := st.FuncOutputIx[key]
+									ad := []byte(`{"type":"response.function_call_arguments.delta","sequence_number":0,"item_id":"","output_index":0,"delta":""}`)
+									ad, _ = sjson.SetBytes(ad, "sequence_number", nextSeq())
+									ad, _ = sjson.SetBytes(ad, "item_id", fmt.Sprintf("fc_%s", refCallID))
+									ad, _ = sjson.SetBytes(ad, "output_index", outputIndex)
+									ad, _ = sjson.SetBytes(ad, "delta", args.String())
+									out = append(out, emitRespEvent("response.function_call_arguments.delta", ad))
+								}
+							}
 						}
 						return true
 					})
@@ -583,6 +624,12 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, 
 						callID := st.FuncCallIDs[key]
 						if callID == "" || st.FuncItemDone[key] {
 							continue
+						}
+						// Flush deferred output_item.added if the name never
+						// arrived during streaming. This ensures the event
+						// sequence is complete before emitting done events.
+						if !st.FuncItemAdded[key] {
+							out = flushPendingFunctionCall(out, st, key, nextSeq)
 						}
 						outputIndex := st.FuncOutputIx[key]
 						args := "{}"

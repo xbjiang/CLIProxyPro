@@ -421,3 +421,128 @@ func TestConvertOpenAIChatCompletionsResponseToOpenAIResponses_FunctionCallDoneA
 		t.Fatalf("unexpected completed function_call order: %v", completedOrder)
 	}
 }
+
+// TestConvertOpenAIChatCompletionsResponseToOpenAIResponses_DeferredFunctionCallName
+// verifies that when the upstream sends a tool_call ID before the function name,
+// the translator defers response.output_item.added until the name arrives, then
+// replays buffered arguments. This is the Glm5.2 / ai.agrtc.cn scenario.
+func TestConvertOpenAIChatCompletionsResponseToOpenAIResponses_DeferredFunctionCallName(t *testing.T) {
+	t.Parallel()
+
+	request := []byte(`{"model":"Glm5.2","tool_choice":"auto"}`)
+
+	// Simulate upstream that sends: ID first (no name), then arguments, then name last.
+	in := []string{
+		// Chunk 1: tool_call with ID but no function.name
+		`data: {"id":"resp_deferred","object":"chat.completion.chunk","created":1,"model":"Glm5.2","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"arguments":""}}]},"finish_reason":null}]}`,
+		// Chunk 2: arguments arrive (name still missing)
+		`data: {"id":"resp_deferred","object":"chat.completion.chunk","created":1,"model":"Glm5.2","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"query\":\"test\"}"}}]},"finish_reason":null}]}`,
+		// Chunk 3: name finally arrives
+		`data: {"id":"resp_deferred","object":"chat.completion.chunk","created":1,"model":"Glm5.2","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"name":"web_search","arguments":""}}]},"finish_reason":null}]}`,
+		// Chunk 4: finish
+		`data: {"id":"resp_deferred","object":"chat.completion.chunk","created":1,"model":"Glm5.2","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+	}
+
+	var param any
+	var out [][]byte
+	for _, line := range in {
+		out = append(out, ConvertOpenAIChatCompletionsResponseToOpenAIResponses(context.Background(), "Glm5.2", request, request, []byte(line), &param)...)
+	}
+
+	var addedCount int
+	var addedName string
+	var deltaCount int
+	var deltaArgs string
+	var doneName string
+	var completedName string
+
+	for _, chunk := range out {
+		ev, data := parseOpenAIResponsesSSEEvent(t, chunk)
+		switch ev {
+		case "response.output_item.added":
+			if data.Get("item.type").String() == "function_call" {
+				addedCount++
+				addedName = data.Get("item.name").String()
+			}
+		case "response.function_call_arguments.delta":
+			deltaCount++
+			deltaArgs += data.Get("delta").String()
+		case "response.output_item.done":
+			if data.Get("item.type").String() == "function_call" {
+				doneName = data.Get("item.name").String()
+			}
+		case "response.completed":
+			for _, item := range data.Get("response.output").Array() {
+				if item.Get("type").String() == "function_call" {
+					completedName = item.Get("name").String()
+				}
+			}
+		}
+	}
+
+	// output_item.added must fire exactly once, with the correct name
+	if addedCount != 1 {
+		t.Fatalf("expected 1 output_item.added for function_call, got %d", addedCount)
+	}
+	if addedName != "web_search" {
+		t.Fatalf("expected output_item.added name %q, got %q", "web_search", addedName)
+	}
+
+	// Buffered arguments must be replayed
+	if deltaCount == 0 {
+		t.Fatalf("expected at least 1 arguments.delta event after deferred flush")
+	}
+	if deltaArgs != `{"query":"test"}` {
+		t.Fatalf("expected replayed delta args %q, got %q", `{"query":"test"}`, deltaArgs)
+	}
+
+	// output_item.done and response.completed must carry the correct name
+	if doneName != "web_search" {
+		t.Fatalf("expected output_item.done name %q, got %q", "web_search", doneName)
+	}
+	if completedName != "web_search" {
+		t.Fatalf("expected response.completed function_call name %q, got %q", "web_search", completedName)
+	}
+}
+
+// TestConvertOpenAIChatCompletionsResponseToOpenAIResponses_StandardNameNotDeferred
+// verifies that when the upstream sends the function name in the first chunk
+// (standard OpenAI behavior), output_item.added fires immediately — no behavioral change.
+func TestConvertOpenAIChatCompletionsResponseToOpenAIResponses_StandardNameNotDeferred(t *testing.T) {
+	t.Parallel()
+
+	request := []byte(`{"model":"gpt-5.4","tool_choice":"auto"}`)
+
+	// Standard OpenAI: name arrives with the ID in the first chunk
+	in := []string{
+		`data: {"id":"resp_std","object":"chat.completion.chunk","created":1,"model":"gpt-5.4","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_xyz","type":"function","function":{"name":"read_file","arguments":""}}]},"finish_reason":null}]}`,
+		`data: {"id":"resp_std","object":"chat.completion.chunk","created":1,"model":"gpt-5.4","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\":\"/tmp/a\"}"}}]},"finish_reason":null}]}`,
+		`data: {"id":"resp_std","object":"chat.completion.chunk","created":1,"model":"gpt-5.4","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+	}
+
+	var param any
+	var out [][]byte
+	for _, line := range in {
+		out = append(out, ConvertOpenAIChatCompletionsResponseToOpenAIResponses(context.Background(), "gpt-5.4", request, request, []byte(line), &param)...)
+	}
+
+	var addedCount int
+	var addedName string
+
+	for _, chunk := range out {
+		ev, data := parseOpenAIResponsesSSEEvent(t, chunk)
+		if ev == "response.output_item.added" && data.Get("item.type").String() == "function_call" {
+			addedCount++
+			addedName = data.Get("item.name").String()
+		}
+	}
+
+	if addedCount != 1 {
+		t.Fatalf("expected 1 output_item.added, got %d", addedCount)
+	}
+	if addedName != "read_file" {
+		t.Fatalf("expected name %q, got %q", "read_file", addedName)
+	}
+}
