@@ -210,13 +210,18 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 			authProvider = routeAs
 		}
 		base := strings.TrimSpace(compat.BaseURL)
+		compatProxyURL := strings.TrimSpace(compat.ProxyURL)
 
 		// Handle new APIKeyEntries format (preferred)
 		createdEntries := 0
 		for j := range compat.APIKeyEntries {
 			entry := &compat.APIKeyEntries[j]
 			key := strings.TrimSpace(entry.APIKey)
+			// Per-entry proxy takes priority; fall back to compat-level proxy
 			proxyURL := strings.TrimSpace(entry.ProxyURL)
+			if proxyURL == "" {
+				proxyURL = compatProxyURL
+			}
 			idKind := fmt.Sprintf("openai-compatibility:%s", providerName)
 			id, token := idGen.Next(idKind, key, base, proxyURL)
 			attrs := map[string]string{
@@ -276,6 +281,7 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 				Label:      compat.Name,
 				Prefix:     prefix,
 				Status:     coreauth.StatusActive,
+				ProxyURL:   compatProxyURL,
 				Attributes: attrs,
 				CreatedAt:  now,
 				UpdatedAt:  now,

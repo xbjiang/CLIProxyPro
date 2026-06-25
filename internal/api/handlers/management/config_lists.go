@@ -483,6 +483,7 @@ func (h *Handler) PatchOpenAICompat(c *gin.Context) {
 		Name          *string                             `json:"name"`
 		Prefix        *string                             `json:"prefix"`
 		BaseURL       *string                             `json:"base-url"`
+		ProxyURL      *string                             `json:"proxy-url"`
 		APIKeyEntries *[]config.OpenAICompatibilityAPIKey `json:"api-key-entries"`
 		Models        *[]config.OpenAICompatibilityModel  `json:"models"`
 		Headers       *map[string]string                  `json:"headers"`
@@ -535,6 +536,9 @@ func (h *Handler) PatchOpenAICompat(c *gin.Context) {
 			return
 		}
 		entry.BaseURL = trimmed
+	}
+	if body.Value.ProxyURL != nil {
+		entry.ProxyURL = strings.TrimSpace(*body.Value.ProxyURL)
 	}
 	if body.Value.APIKeyEntries != nil {
 		entry.APIKeyEntries = append([]config.OpenAICompatibilityAPIKey(nil), (*body.Value.APIKeyEntries)...)

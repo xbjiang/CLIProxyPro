@@ -572,6 +572,10 @@ type OpenAICompatibility struct {
 
 	// Tags is a list of free-form labels for organizing and filtering relays in the management panel.
 	Tags []string `yaml:"tags,omitempty" json:"tags,omitempty"`
+
+	// ProxyURL overrides the global proxy setting for all API keys in this provider if provided.
+	// Applied as fallback when an APIKeyEntry does not set its own proxy-url.
+	ProxyURL string `yaml:"proxy-url,omitempty" json:"proxy-url,omitempty"`
 }
 
 // OpenAICompatibilityAPIKey represents an API key configuration with optional proxy setting.
