@@ -78,7 +78,9 @@ func cloneDefaultTransport() *http.Transport {
 // NewDirectTransport returns a transport that bypasses environment proxies.
 func NewDirectTransport() *http.Transport {
 	clone := cloneDefaultTransport()
-	clone.Proxy = nil
+	// Setting Proxy to a no-op function (not nil) explicitly disables all proxy lookup,
+	// including http.ProxyFromEnvironment which Go uses when Proxy==nil.
+	clone.Proxy = func(*http.Request) (*url.URL, error) { return nil, nil }
 	return clone
 }
 
