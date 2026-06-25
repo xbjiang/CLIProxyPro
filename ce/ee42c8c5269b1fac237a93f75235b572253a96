@@ -1,0 +1,9 @@
+sdk/proxyutil/proxy.go
+  ai_agent 81-83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.24-trip",
+  "base_commit_sha": "ceee42c8c5269b1fac237a93f75235b572253a96",
+  "prompts": {}
+}
