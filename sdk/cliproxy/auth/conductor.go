@@ -2339,6 +2339,21 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 						}
 					}
 				}
+				// A successful request proves the account is healthy. Clear
+				// stale errors on any non-blocking model state (NextRetryAfter
+				// empty or already past), so historical per-model failures
+				// (e.g. 404 not_found on unsupported models) don't keep
+				// auth.Status pegged at error forever. Model states still in
+				// active cooldown (future NextRetryAfter, e.g. 429 quota) are
+				// preserved.
+				for _, ms := range auth.ModelStates {
+					if ms == nil {
+						continue
+					}
+					if ms.NextRetryAfter.IsZero() || !ms.NextRetryAfter.After(now) {
+						resetModelState(ms, now)
+					}
+				}
 				updateAggregatedAvailability(auth, now)
 				if !hasModelError(auth, now) {
 					auth.LastError = nil
