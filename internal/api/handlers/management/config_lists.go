@@ -487,6 +487,7 @@ func (h *Handler) PatchOpenAICompat(c *gin.Context) {
 		APIKeyEntries *[]config.OpenAICompatibilityAPIKey `json:"api-key-entries"`
 		Models        *[]config.OpenAICompatibilityModel  `json:"models"`
 		Headers       *map[string]string                  `json:"headers"`
+		RouteAs       *string                             `json:"route-as"`
 		DisplayName   *string                             `json:"display-name"`
 		Tags          *[]string                           `json:"tags"`
 	}
@@ -548,6 +549,9 @@ func (h *Handler) PatchOpenAICompat(c *gin.Context) {
 	}
 	if body.Value.Headers != nil {
 		entry.Headers = config.NormalizeHeaders(*body.Value.Headers)
+	}
+	if body.Value.RouteAs != nil {
+		entry.RouteAs = strings.TrimSpace(*body.Value.RouteAs)
 	}
 	if body.Value.DisplayName != nil {
 		entry.DisplayName = strings.TrimSpace(*body.Value.DisplayName)
