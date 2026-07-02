@@ -158,7 +158,11 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	defer reporter.TrackFailure(ctx, &err)
 
 	from := opts.SourceFormat
+	isAPIKey := auth != nil && auth.Attributes != nil && strings.TrimSpace(auth.Attributes["api_key"]) != ""
 	to := sdktranslator.FromString("codex")
+	if isAPIKey {
+		to = sdktranslator.FromString("openai-response")
+	}
 	originalPayloadSource := req.Payload
 	if len(opts.OriginalRequest) > 0 {
 		originalPayloadSource = opts.OriginalRequest
@@ -175,13 +179,15 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
 	body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
 	body, _ = sjson.SetBytes(body, "model", baseModel)
-	body, _ = sjson.SetBytes(body, "stream", true)
-	body, _ = sjson.DeleteBytes(body, "previous_response_id")
-	body, _ = sjson.DeleteBytes(body, "prompt_cache_retention")
-	body, _ = sjson.DeleteBytes(body, "safety_identifier")
-	body, _ = sjson.DeleteBytes(body, "stream_options")
-	body = normalizeCodexInstructions(body)
-	body = ensureImageGenerationTool(body, baseModel, auth)
+	if !isAPIKey {
+		body, _ = sjson.SetBytes(body, "stream", true)
+		body, _ = sjson.DeleteBytes(body, "previous_response_id")
+		body, _ = sjson.DeleteBytes(body, "prompt_cache_retention")
+		body, _ = sjson.DeleteBytes(body, "safety_identifier")
+		body, _ = sjson.DeleteBytes(body, "stream_options")
+		body = normalizeCodexInstructions(body)
+		body = ensureImageGenerationTool(body, baseModel, auth)
+	}
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
 	httpReq, err := e.cacheHelper(ctx, from, url, req, body)
@@ -420,7 +426,11 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	defer reporter.TrackFailure(ctx, &err)
 
 	from := opts.SourceFormat
+	isAPIKey := auth != nil && auth.Attributes != nil && strings.TrimSpace(auth.Attributes["api_key"]) != ""
 	to := sdktranslator.FromString("codex")
+	if isAPIKey {
+		to = sdktranslator.FromString("openai-response")
+	}
 	originalPayloadSource := req.Payload
 	if len(opts.OriginalRequest) > 0 {
 		originalPayloadSource = opts.OriginalRequest
@@ -437,13 +447,15 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 
 	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
 	body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
-	body, _ = sjson.DeleteBytes(body, "previous_response_id")
-	body, _ = sjson.DeleteBytes(body, "prompt_cache_retention")
-	body, _ = sjson.DeleteBytes(body, "safety_identifier")
-	body, _ = sjson.DeleteBytes(body, "stream_options")
 	body, _ = sjson.SetBytes(body, "model", baseModel)
-	body = normalizeCodexInstructions(body)
-	body = ensureImageGenerationTool(body, baseModel, auth)
+	if !isAPIKey {
+		body, _ = sjson.DeleteBytes(body, "previous_response_id")
+		body, _ = sjson.DeleteBytes(body, "prompt_cache_retention")
+		body, _ = sjson.DeleteBytes(body, "safety_identifier")
+		body, _ = sjson.DeleteBytes(body, "stream_options")
+		body = normalizeCodexInstructions(body)
+		body = ensureImageGenerationTool(body, baseModel, auth)
+	}
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
 	httpReq, err := e.cacheHelper(ctx, from, url, req, body)

@@ -119,8 +119,10 @@ type openAICompatibilityWithAuthIndex struct {
 	APIKeyEntries []openAICompatibilityAPIKeyWithAuthIndex `json:"api-key-entries,omitempty"`
 	Models        []config.OpenAICompatibilityModel        `json:"models,omitempty"`
 	Headers       map[string]string                        `json:"headers,omitempty"`
+	RouteAs       string                                   `json:"route-as,omitempty"`
 	DisplayName   string                                   `json:"display-name,omitempty"`
 	Tags          []string                                 `json:"tags,omitempty"`
+	ProxyURL      string                                   `json:"proxy-url,omitempty"`
 	AuthIndex     string                                   `json:"auth-index,omitempty"`
 }
 
@@ -354,8 +356,10 @@ func (h *Handler) openAICompatibilityWithAuthIndex() []openAICompatibilityWithAu
 			BaseURL:     entry.BaseURL,
 			Models:      entry.Models,
 			Headers:     entry.Headers,
+			RouteAs:     entry.RouteAs,
 			DisplayName: entry.DisplayName,
 			Tags:        entry.Tags,
+			ProxyURL:    entry.ProxyURL,
 			AuthIndex:   "",
 		}
 		if len(entry.APIKeyEntries) == 0 {
@@ -365,7 +369,12 @@ func (h *Handler) openAICompatibilityWithAuthIndex() []openAICompatibilityWithAu
 			response.APIKeyEntries = make([]openAICompatibilityAPIKeyWithAuthIndex, len(entry.APIKeyEntries))
 			for j := range entry.APIKeyEntries {
 				apiKeyEntry := entry.APIKeyEntries[j]
-				id, _ := idGen.Next(idKind, apiKeyEntry.APIKey, entry.BaseURL, apiKeyEntry.ProxyURL)
+				// Must mirror synthesizer: per-entry proxy takes priority, fallback to compat-level proxy.
+				entryProxyURL := strings.TrimSpace(apiKeyEntry.ProxyURL)
+				if entryProxyURL == "" {
+					entryProxyURL = strings.TrimSpace(entry.ProxyURL)
+				}
+				id, _ := idGen.Next(idKind, apiKeyEntry.APIKey, entry.BaseURL, entryProxyURL)
 				response.APIKeyEntries[j] = openAICompatibilityAPIKeyWithAuthIndex{
 					OpenAICompatibilityAPIKey: apiKeyEntry,
 					AuthIndex:                 liveIndexByID[id],
