@@ -125,7 +125,7 @@ func (e *Executor) sendKeepaliveRequest(ctx context.Context, authID string) erro
 	kaCtx := kacontext.WithKeepaliveContext(ctx)
 
 	payload := map[string]any{
-		"model": "gpt-5.4-mini",
+		"model": "gpt-5.5",
 		"messages": []map[string]string{
 			{"role": "user", "content": "hi"},
 		},
@@ -144,7 +144,7 @@ func (e *Executor) sendKeepaliveRequest(ctx context.Context, authID string) erro
 	}
 
 	req := cliproxyexecutor.Request{
-		Model:   "gpt-5.4-mini",
+		Model:   "gpt-5.5",
 		Payload: payloadBytes,
 	}
 
