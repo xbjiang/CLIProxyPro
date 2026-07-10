@@ -1,0 +1,9 @@
+internal/runtime/executor/antigravity_executor.go
+  ai_agent 883,899-901
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.33-trip",
+  "base_commit_sha": "15ea35a0d2569698421666277539df32ec6af1e9",
+  "prompts": {}
+}
