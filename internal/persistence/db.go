@@ -218,5 +218,14 @@ CREATE INDEX IF NOT EXISTS idx_arh_auth_index ON account_reset_history(auth_inde
 		_, _ = db.Exec(`ALTER TABLE usage_records ADD COLUMN ttft_ms INTEGER DEFAULT 0`)
 	}
 
+	// Migration: add reasoning_level column to usage_records
+	var rlExists bool
+	if qErr := db.QueryRow(`
+		SELECT COUNT(*) > 0 FROM pragma_table_info('usage_records')
+		WHERE name = 'reasoning_level'
+	`).Scan(&rlExists); qErr == nil && !rlExists {
+		_, _ = db.Exec(`ALTER TABLE usage_records ADD COLUMN reasoning_level TEXT DEFAULT ''`)
+	}
+
 	return nil
 }

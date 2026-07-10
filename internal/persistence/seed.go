@@ -26,7 +26,8 @@ func SeedUsageStats(db *sql.DB, stats *usage.RequestStatistics) error {
 			COALESCE(provider,''),
 			input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens,
 			failed,
-			is_keepalive
+			is_keepalive,
+			COALESCE(reasoning_level,'')
 		FROM usage_records
 		ORDER BY timestamp ASC
 	`)
@@ -46,12 +47,12 @@ func SeedUsageStats(db *sql.DB, stats *usage.RequestStatistics) error {
 
 	for rows.Next() {
 		var (
-			apiKey, model, tsStr, source, authIndex, provider string
-			in, out, reason, cache, total                     int64
-			failed, isKeepalive                               int
+			apiKey, model, tsStr, source, authIndex, provider, reasoningLevel string
+			in, out, reason, cache, total                                     int64
+			failed, isKeepalive                                               int
 		)
 		if err := rows.Scan(&apiKey, &model, &tsStr, &source, &authIndex, &provider,
-			&in, &out, &reason, &cache, &total, &failed, &isKeepalive); err != nil {
+			&in, &out, &reason, &cache, &total, &failed, &isKeepalive, &reasoningLevel); err != nil {
 			continue
 		}
 
@@ -68,12 +69,13 @@ func SeedUsageStats(db *sql.DB, stats *usage.RequestStatistics) error {
 		}
 
 		detail := usage.RequestDetail{
-			Timestamp:   ts,
-			Source:      source,
-			AuthIndex:   authIndex,
-			Provider:    provider,
-			Failed:      failed != 0,
-			IsKeepalive: isKeepalive != 0,
+			Timestamp:      ts,
+			Source:         source,
+			AuthIndex:      authIndex,
+			Provider:       provider,
+			Failed:         failed != 0,
+			IsKeepalive:    isKeepalive != 0,
+			ReasoningLevel: reasoningLevel,
 			Tokens: usage.TokenStats{
 				InputTokens:     in,
 				OutputTokens:    out,

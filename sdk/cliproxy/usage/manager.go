@@ -24,6 +24,7 @@ type Record struct {
 	Detail       Detail
 	StatusCode   int
 	ErrorMessage string
+	ReasoningLevel string
 }
 
 // Detail holds the token usage breakdown.

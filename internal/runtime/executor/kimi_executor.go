@@ -106,6 +106,7 @@ func (e *KimiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 	if err != nil {
 		return resp, err
 	}
+	reporter.SetReasoningLevel(body, "kimi")
 
 	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
 	body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
@@ -214,6 +215,7 @@ func (e *KimiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 	if err != nil {
 		return nil, err
 	}
+	reporter.SetReasoningLevel(body, "kimi")
 
 	body, err = sjson.SetBytes(body, "stream_options.include_usage", true)
 	if err != nil {

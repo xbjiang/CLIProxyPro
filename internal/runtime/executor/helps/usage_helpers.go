@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -28,6 +29,7 @@ type UsageReporter struct {
 	once         sync.Once
 	statusCode   int
 	errorMessage string
+	reasoningLevel string
 }
 
 func NewUsageReporter(ctx context.Context, provider, model string, auth *cliproxyauth.Auth) *UsageReporter {
@@ -57,6 +59,13 @@ func (r *UsageReporter) SetStatusCode(code int) {
 func (r *UsageReporter) SetServiceTier(tier string) {
 	if r != nil {
 		r.serviceTier = tier
+	}
+}
+
+// SetReasoningLevel extracts and records the reasoning level from the request payload.
+func (r *UsageReporter) SetReasoningLevel(body []byte, toFormat string) {
+	if r != nil {
+		r.reasoningLevel = thinking.ExtractReasoningLevel(body)
 	}
 }
 
@@ -122,20 +131,21 @@ func (r *UsageReporter) buildRecord(detail usage.Detail, failed bool, statusCode
 		return usage.Record{Detail: detail, Failed: failed, StatusCode: statusCode, ErrorMessage: errorMessage}
 	}
 	return usage.Record{
-		Provider:     r.provider,
-		Model:        r.model,
-		Source:       r.source,
-		APIKey:       r.apiKey,
-		AuthID:       r.authID,
-		AuthIndex:    r.authIndex,
-		RequestedAt:  r.requestedAt,
-		Latency:      r.latency(),
-		TTFTMs:       r.ttftMs(),
-		ServiceTier:  r.serviceTier,
-		Failed:       failed,
-		Detail:       detail,
-		StatusCode:   statusCode,
-		ErrorMessage: errorMessage,
+		Provider:       r.provider,
+		Model:          r.model,
+		Source:         r.source,
+		APIKey:         r.apiKey,
+		AuthID:         r.authID,
+		AuthIndex:      r.authIndex,
+		RequestedAt:    r.requestedAt,
+		Latency:        r.latency(),
+		TTFTMs:         r.ttftMs(),
+		ServiceTier:    r.serviceTier,
+		Failed:         failed,
+		Detail:         detail,
+		StatusCode:     statusCode,
+		ErrorMessage:   errorMessage,
+		ReasoningLevel: r.reasoningLevel,
 	}
 }
 
