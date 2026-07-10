@@ -1,0 +1,41 @@
+internal/runtime/executor/aistudio_executor.go
+  ai_agent 138,205
+internal/persistence/seed.go
+  ai_agent 29-30,50-52,55,72-78
+internal/runtime/executor/openai_compat_executor.go
+  ai_agent 111,212
+internal/runtime/executor/codex_websockets_executor.go
+  ai_agent 185,398
+internal/runtime/executor/gemini_vertex_executor.go
+  ai_agent 335,459,573,706
+internal/runtime/executor/helps/usage_helpers.go
+  ai_agent 14,32,65-71,134-148
+internal/runtime/executor/claude_executor.go
+  ai_agent 162,358
+internal/runtime/executor/gemini_cli_executor.go
+  ai_agent 139,300
+internal/usage/logger_plugin.go
+  ai_agent 107,211-223
+internal/thinking/extract.go
+  ai_agent 1-82
+sdk/cliproxy/usage/manager.go
+  ai_agent 27
+internal/runtime/executor/gemini_executor.go
+  ai_agent 132,243
+internal/runtime/executor/codex_executor.go
+  ai_agent 178,342,449
+internal/persistence/db.go
+  ai_agent 221-229
+internal/runtime/executor/kimi_executor.go
+  ai_agent 109,218
+internal/runtime/executor/antigravity_executor.go
+  ai_agent 522,723,1187
+internal/persistence/usage.go
+  ai_agent 33-34,55,252,570-571,588
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.33-trip",
+  "base_commit_sha": "2794714cfd6bda9452a9cb8c13639ca518607d3f",
+  "prompts": {}
+}
