@@ -576,6 +576,17 @@ func (r *ModelRegistry) UnregisterClient(clientID string) {
 	r.invalidateAvailableModelsCacheLocked()
 }
 
+// CountClientModels returns the number of unique model IDs registered for a client.
+func (r *ModelRegistry) CountClientModels(clientID string) int {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+	seen := make(map[string]struct{})
+	for _, id := range r.clientModels[clientID] {
+		seen[id] = struct{}{}
+	}
+	return len(seen)
+}
+
 // unregisterClientInternal performs the actual client unregistration (internal, no locking)
 func (r *ModelRegistry) unregisterClientInternal(clientID string) {
 	models, exists := r.clientModels[clientID]

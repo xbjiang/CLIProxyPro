@@ -810,7 +810,8 @@ func isolateProvidersByHandler(handlerType string, providers []string) []string 
 	case "claude":
 		filtered := providers[:0:0]
 		for _, p := range providers {
-			if strings.EqualFold(strings.TrimSpace(p), "claude") {
+			norm := strings.ToLower(strings.TrimSpace(p))
+			if norm == "claude" || norm == "antigravity" {
 				filtered = append(filtered, p)
 			}
 		}

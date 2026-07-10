@@ -21,6 +21,7 @@ import (
 	. "github.com/router-for-me/CLIProxyAPI/v6/internal/constant"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
@@ -59,13 +60,15 @@ func (h *ClaudeCodeAPIHandler) HandlerType() string {
 
 // Models returns a list of models supported by this handler.
 func (h *ClaudeCodeAPIHandler) Models() []map[string]any {
-	// Get dynamic models from the global registry
 	modelRegistry := registry.GetGlobalRegistry()
 	allModels := modelRegistry.GetAvailableModels("claude")
 
-	// If a specific provider is pinned, only return models supported by that pin.
 	if h.AuthManager != nil {
+		// Check pins for both claude and antigravity providers.
 		pinID := h.AuthManager.GetPinnedAuthForProvider("claude")
+		if pinID == "" {
+			pinID = h.AuthManager.GetPinnedAuthForProvider("antigravity")
+		}
 		if pinID != "" {
 			var pinnedAuth *coreauth.Auth
 			for _, a := range h.AuthManager.List() {
@@ -227,13 +230,21 @@ func (h *ClaudeCodeAPIHandler) ClaudeModels(c *gin.Context) {
 
 // resolveModelName looks up the mapping table to convert a claude-prefixed
 // display name back to the original model ID registered in the model registry.
-// If the name is not found in the map, it is returned unchanged.
+// If the name is not found in the map, it falls back to stripping the "claude-"
+// prefix when the stripped name resolves to a known provider.
 func (h *ClaudeCodeAPIHandler) resolveModelName(name string) string {
 	h.modelMapMu.RLock()
 	original, ok := h.modelMap[name]
 	h.modelMapMu.RUnlock()
 	if ok {
 		return original
+	}
+	const claudePrefix = "claude-"
+	if strings.HasPrefix(name, claudePrefix) {
+		stripped := name[len(claudePrefix):]
+		if providers := util.GetProviderName(stripped); len(providers) > 0 {
+			return stripped
+		}
 	}
 	return name
 }

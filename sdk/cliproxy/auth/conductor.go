@@ -2577,10 +2577,23 @@ func updateAggregatedAvailability(auth *Auth, now time.Time) {
 	// recovery time, the entire account must be blocked regardless of other
 	// model states. Codex quotas are per-user, not per-model, so a
 	// usage_limit_reached on one model means all models are exhausted.
-	if quotaExceeded && !quotaRecover.IsZero() && quotaRecover.After(now) {
+	// Antigravity has independent quotas per model group (Claude vs Gemini),
+	// so we skip account-level escalation to avoid cross-group contamination.
+	if quotaExceeded && !quotaRecover.IsZero() && quotaRecover.After(now) && auth.Provider != "antigravity" {
 		allUnavailable = true
 		if earliestRetry.IsZero() || quotaRecover.Before(earliestRetry) {
 			earliestRetry = quotaRecover
+		}
+	}
+	// For antigravity, model groups have independent quotas (Claude vs Gemini).
+	// Only mark the auth unavailable if ALL registered models have state entries
+	// and all are unavailable. When only a subset of models have states (e.g.
+	// Claude group exhausted but Gemini never failed), the auth must remain
+	// available so that requests for the healthy group can still be served.
+	if auth.Provider == "antigravity" && allUnavailable && hasState {
+		registeredCount := registry.GetGlobalRegistry().CountClientModels(auth.ID)
+		if registeredCount > len(auth.ModelStates) {
+			allUnavailable = false
 		}
 	}
 	auth.Unavailable = allUnavailable
