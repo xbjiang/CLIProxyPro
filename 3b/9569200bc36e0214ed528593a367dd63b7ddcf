@@ -1,0 +1,13 @@
+internal/persistence/usage.go
+  ai_agent 574
+internal/runtime/executor/antigravity_executor.go
+  ai_agent 1352,1369-1371
+internal/runtime/executor/helps/usage_helpers.go
+  ai_agent 335-336,340,342,355-356,360,362
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.33-trip",
+  "base_commit_sha": "3b9569200bc36e0214ed528593a367dd63b7ddcf",
+  "prompts": {}
+}
