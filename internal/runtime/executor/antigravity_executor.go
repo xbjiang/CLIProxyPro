@@ -1349,6 +1349,7 @@ attemptLoop:
 						log.Errorf("antigravity executor: close response body error: %v", errClose)
 					}
 				}()
+				firstChunk := true
 				scanner := bufio.NewScanner(resp.Body)
 				scanner.Buffer(nil, streamScannerBuffer)
 				var param any
@@ -1363,6 +1364,11 @@ attemptLoop:
 					payload := helps.JSONPayload(line)
 					if payload == nil {
 						continue
+					}
+
+					if firstChunk {
+						reporter.SetTTFT()
+						firstChunk = false
 					}
 
 					if detail, ok := helps.ParseAntigravityStreamUsage(payload); ok {

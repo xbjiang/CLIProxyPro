@@ -571,7 +571,7 @@ func QueryByDateRange(ctx context.Context, db *sql.DB, startDate, endDate string
 			   COALESCE(reasoning_level, '')
 		FROM usage_records
 		WHERE DATE(timestamp, 'localtime') >= ? AND DATE(timestamp, 'localtime') <= ?
-		ORDER BY timestamp DESC LIMIT 1000`,
+		ORDER BY timestamp DESC`,
 		startDate, endDate)
 	if err != nil {
 		return nil, nil, err
