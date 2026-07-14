@@ -1,0 +1,9 @@
+internal/persistence/seed.go
+  ai_agent 30-32,55,58-59,83-84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.34-trip",
+  "base_commit_sha": "3c9863b024d613299fe21eaaf00aa11420d0b2b8",
+  "prompts": {}
+}
