@@ -1,0 +1,11 @@
+sdk/api/handlers/claude/code_handlers.go
+  ai_agent 81,86-102
+sdk/cliproxy/auth/conductor.go
+  ai_agent 3181-3194
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.33-trip",
+  "base_commit_sha": "219879d7cdf345e2e36bef257223bd1b1157a58f",
+  "prompts": {}
+}
