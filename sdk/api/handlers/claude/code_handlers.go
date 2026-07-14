@@ -78,11 +78,28 @@ func (h *ClaudeCodeAPIHandler) Models() []map[string]any {
 				}
 			}
 			if pinnedAuth != nil {
+				pinnedProvider := strings.ToLower(strings.TrimSpace(pinnedAuth.Provider))
 				filteredModels := make([]map[string]any, 0, len(allModels))
 				for _, modelMap := range allModels {
 					if id, ok := modelMap["id"].(string); ok {
 						if h.AuthManager.AuthSupportsRouteModel(modelRegistry, pinnedAuth, id) {
-							filteredModels = append(filteredModels, modelMap)
+							if info := modelRegistry.GetModelInfo(id, pinnedProvider); info != nil {
+								rebuilt := map[string]any{
+									"id":       info.ID,
+									"object":   "model",
+									"owned_by": info.OwnedBy,
+									"type":     "model",
+								}
+								if info.Created > 0 {
+									rebuilt["created_at"] = info.Created
+								}
+								if info.DisplayName != "" {
+									rebuilt["display_name"] = info.DisplayName
+								}
+								filteredModels = append(filteredModels, rebuilt)
+							} else {
+								filteredModels = append(filteredModels, modelMap)
+							}
 						}
 					}
 				}

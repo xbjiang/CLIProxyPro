@@ -3178,9 +3178,20 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cli
 
 func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, string, error) {
 	pinnedAuthID := pinnedAuthIDFromMetadata(opts.Metadata)
-	// For mixed providers, we do not apply a single provider pin at this stage,
-	// because we don't know which provider will be selected. Instead, if a candidate
-	// is pinned for its own provider, we prioritize it during candidate selection below.
+	// Promote a global provider pin to act as the request-level pinnedAuthID.
+	// This gives the pinned account pool-wide priority across all providers
+	// in the mixed candidate set, not just within its own provider.
+	if pinnedAuthID == "" {
+		for _, provider := range providers {
+			p := strings.TrimSpace(strings.ToLower(provider))
+			if id := m.GetPinnedAuthForProvider(p); id != "" {
+				if _, alreadyTried := tried[id]; !alreadyTried {
+					pinnedAuthID = id
+					break
+				}
+			}
+		}
+	}
 
 	providerSet := make(map[string]struct{}, len(providers))
 	for _, provider := range providers {
