@@ -89,6 +89,14 @@ CREATE INDEX IF NOT EXISTS idx_arh_auth_index ON account_reset_history(auth_inde
 		return fmt.Errorf("persistence: init schema: %w", err)
 	}
 
+	if err := InitSessionBindingsTable(db); err != nil {
+		return fmt.Errorf("persistence: init session_bindings: %w", err)
+	}
+
+	if err := InitSessionSeenTable(db); err != nil {
+		return fmt.Errorf("persistence: init session_seen: %w", err)
+	}
+
 	// Migration: add last_keepalive_sent_at column if it doesn't exist
 	var colExists bool
 	err := db.QueryRow(`

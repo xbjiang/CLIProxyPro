@@ -369,6 +369,36 @@ func (m *Manager) SetSelector(selector Selector) {
 	}
 }
 
+// InvalidateSessionCache removes a session binding from the in-memory affinity cache.
+// No-op when session affinity is not enabled.
+func (m *Manager) InvalidateSessionCache(sessionID string) {
+	if m == nil {
+		return
+	}
+	m.mu.RLock()
+	sel := m.selector
+	m.mu.RUnlock()
+	if sas, ok := sel.(*SessionAffinitySelector); ok {
+		sas.cache.Invalidate(sessionID)
+	}
+}
+
+// ResolveAuthIDByIndex finds the auth ID corresponding to a given auth index.
+// Returns empty string if not found.
+func (m *Manager) ResolveAuthIDByIndex(index string) string {
+	if m == nil || index == "" {
+		return ""
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, auth := range m.auths {
+		if auth.EnsureIndex() == index {
+			return auth.ID
+		}
+	}
+	return ""
+}
+
 // SetPinnedAuth pins routing to a specific auth ID for its respective provider.
 // If authID is empty, it does nothing. Use ClearPinnedAuth to remove a pin.
 func (m *Manager) SetPinnedAuth(authID string) {

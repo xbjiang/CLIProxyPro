@@ -5,6 +5,7 @@ package handlers
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/persistence"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -267,6 +269,14 @@ type BaseAPIHandler struct {
 
 	// Cfg holds the current application configuration.
 	Cfg *config.SDKConfig
+
+	// PersistenceDB is the SQLite database for session binding lookups.
+	PersistenceDB *sql.DB
+}
+
+// SetPersistenceDB injects the SQLite database for session binding lookups.
+func (h *BaseAPIHandler) SetPersistenceDB(db *sql.DB) {
+	h.PersistenceDB = db
 }
 
 // NewBaseAPIHandlers creates a new API handlers instance.
@@ -495,7 +505,11 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 		OriginalRequest: rawJSON,
 		SourceFormat:    sdktranslator.FromString(handlerType),
 	}
+	if ginCtx, ok := ctx.Value("gin").(*gin.Context); ok && ginCtx != nil {
+		opts.Headers = ginCtx.Request.Header
+	}
 	opts.Metadata = reqMeta
+	h.injectSessionBinding(ctx, rawJSON, opts.Headers, opts.Metadata)
 	resp, err := h.AuthManager.Execute(ctx, providers, req, opts)
 	if err != nil {
 		err = enrichAuthSelectionError(err, providers, normalizedModel)
@@ -593,7 +607,11 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 		OriginalRequest: rawJSON,
 		SourceFormat:    sdktranslator.FromString(handlerType),
 	}
+	if ginCtx, ok := ctx.Value("gin").(*gin.Context); ok && ginCtx != nil {
+		opts.Headers = ginCtx.Request.Header
+	}
 	opts.Metadata = reqMeta
+	h.injectSessionBinding(ctx, rawJSON, opts.Headers, opts.Metadata)
 	streamResult, err := h.AuthManager.ExecuteStream(ctx, providers, req, opts)
 	if err != nil {
 		err = enrichAuthSelectionError(err, providers, normalizedModel)
@@ -1039,3 +1057,111 @@ func (h *BaseAPIHandler) LoggingAPIResponseError(ctx context.Context, err *inter
 // APIHandlerCancelFunc is a function type for canceling an API handler's context.
 // It can optionally accept parameters, which are used for logging the response.
 type APIHandlerCancelFunc func(params ...interface{})
+
+// injectSessionBinding extracts the CLI session ID from request headers,
+// records it in session_seen for the frontend "recent sessions" list,
+// and if a persistent binding exists, injects it as a per-request pin.
+func (h *BaseAPIHandler) injectSessionBinding(ctx context.Context, rawJSON []byte, headers http.Header, meta map[string]any) {
+	if h.PersistenceDB == nil {
+		return
+	}
+	if _, already := meta[coreexecutor.PinnedAuthMetadataKey]; already {
+		return
+	}
+
+	sessionID, provider, workspace := extractCLISession(headers, rawJSON)
+	if sessionID == "" {
+		return
+	}
+
+	go persistence.UpsertSessionSeen(h.PersistenceDB, sessionID, provider, workspace)
+
+	authValue, found, _ := persistence.GetSessionBinding(h.PersistenceDB, sessionID)
+	if !found {
+		return
+	}
+	// authValue may be an auth_id (contains ':') or an auth_index (plain hex).
+	// pickNextLegacy matches on auth.ID, so if we have an index, resolve it.
+	if !strings.Contains(authValue, ":") && h.AuthManager != nil {
+		if resolved := h.AuthManager.ResolveAuthIDByIndex(authValue); resolved != "" {
+			authValue = resolved
+		}
+	}
+	meta[coreexecutor.PinnedAuthMetadataKey] = authValue
+}
+
+// extractCLISession extracts session ID, provider type, and workspace from request headers and body.
+func extractCLISession(headers http.Header, rawJSON []byte) (sessionID, provider, workspace string) {
+	if headers == nil {
+		return "", "", ""
+	}
+	if sid := headers.Get("X-Claude-Code-Session-Id"); sid != "" {
+		ws := extractClaudeWorkspace(rawJSON)
+		return sid, "claude", ws
+	}
+	if sid := headers.Get("Session-Id"); sid != "" {
+		ws := extractCodexWorkspace(headers.Get("X-Codex-Turn-Metadata"))
+		return sid, "codex", ws
+	}
+	return "", "", ""
+}
+
+// extractCodexWorkspace parses the first workspace path from X-Codex-Turn-Metadata JSON.
+func extractCodexWorkspace(metaJSON string) string {
+	if metaJSON == "" {
+		return ""
+	}
+	// Quick extraction: find "workspaces":{"/path/..."
+	// Use simple JSON key search to avoid importing gjson in this package.
+	const marker = `"workspaces":{"`
+	idx := strings.Index(metaJSON, marker)
+	if idx < 0 {
+		return ""
+	}
+	start := idx + len(marker)
+	end := strings.Index(metaJSON[start:], `"`)
+	if end < 0 {
+		return ""
+	}
+	path := metaJSON[start : start+end]
+	// Return last path segment as workspace name
+	if i := strings.LastIndex(path, "/"); i >= 0 {
+		return path[i+1:]
+	}
+	return path
+}
+
+// extractClaudeWorkspace extracts workspace from Claude Code request body.
+// Searches for "Primary working directory: /path/..." using LastIndex to
+// find the most relevant occurrence efficiently without full JSON parsing.
+func extractClaudeWorkspace(rawJSON []byte) string {
+	if len(rawJSON) == 0 {
+		return ""
+	}
+	const marker = "Primary working directory: "
+	s := string(rawJSON)
+	idx := strings.LastIndex(s, marker)
+	if idx < 0 {
+		return ""
+	}
+	return extractPathAfterMarker(s, idx+len(marker))
+}
+
+func extractPathAfterMarker(s string, start int) string {
+	end := start
+	for end < len(s) {
+		c := s[end]
+		if c == '\n' || c == '"' || c == '`' || c == '\\' {
+			break
+		}
+		end++
+	}
+	path := strings.TrimSpace(s[start:end])
+	if path == "" {
+		return ""
+	}
+	if i := strings.LastIndex(path, "/"); i >= 0 {
+		return path[i+1:]
+	}
+	return path
+}

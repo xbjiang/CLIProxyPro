@@ -609,6 +609,11 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/routing/skipped-relays", s.mgmt.GetSkippedRelays)
 		mgmt.PUT("/routing/skipped-relays", s.mgmt.PutSkippedRelays)
 
+		mgmt.GET("/routing/session-bindings", s.mgmt.GetSessionBindings)
+		mgmt.PUT("/routing/session-bindings", s.mgmt.PutSessionBinding)
+		mgmt.DELETE("/routing/session-bindings/:session_id", s.mgmt.DeleteSessionBinding)
+		mgmt.GET("/routing/recent-sessions", s.mgmt.GetRecentSessions)
+
 		mgmt.GET("/current-account", s.mgmt.GetCurrentAccount)
 
 		// Persistence-backed endpoints (served by Go, no Node.js proxy)
@@ -1061,12 +1066,15 @@ func (s *Server) SetWebsocketAuthChangeHandler(fn func(bool, bool)) {
 	s.wsAuthChanged = fn
 }
 
-// SetPersistenceDB injects the SQLite database into the management handler.
+// SetPersistenceDB injects the SQLite database into the management handler and API handlers.
 func (s *Server) SetPersistenceDB(db *sql.DB) {
 	if s == nil || s.mgmt == nil {
 		return
 	}
 	s.mgmt.SetPersistenceDB(db)
+	if s.handlers != nil {
+		s.handlers.SetPersistenceDB(db)
+	}
 }
 
 // SetKeepaliveScheduler injects the keepalive scheduler into the management handler.
