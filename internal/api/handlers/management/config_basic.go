@@ -395,11 +395,23 @@ func (h *Handler) PutPinnedAccount(c *gin.Context) {
 			} else {
 				h.authManager.SetPinnedAuth(a.ID)
 			}
+			// Synchronously refresh the pinned relay's real model list from
+			// upstream. This recovers from a stale static catalog left behind
+			// when the startup-time one-shot discovery failed (e.g. the relay
+			// was down at boot). Bounded timeout so the pin PUT cannot hang.
+			discCtx, discCancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+			refreshErr := h.authManager.RediscoverModelsForAuth(discCtx, a.ID)
+			discCancel()
+			// Clear the Claude Code client-side model cache so the next session
+			// re-fetches the freshly discovered list — same effect as the top
+			// "清空缓存" button, so the user only needs to restart the session.
+			clearClaudeCodeCacheFiles()
 			resp := gin.H{
-				"status":       "ok",
-				"auth_id":      a.ID,
-				"auth_index":   a.EnsureIndex(),
-				"display_name": func() string { _, dn := a.AccountInfo(); return dn }(),
+				"status":          "ok",
+				"auth_id":         a.ID,
+				"auth_index":      a.EnsureIndex(),
+				"display_name":    func() string { _, dn := a.AccountInfo(); return dn }(),
+				"model_refreshed": refreshErr == nil,
 			}
 			if accountType, account := a.AccountInfo(); accountType != "" || account != "" {
 				if accountType != "" {
@@ -408,6 +420,9 @@ func (h *Handler) PutPinnedAccount(c *gin.Context) {
 				if account != "" {
 					resp["account"] = account
 				}
+			}
+			if refreshErr != nil {
+				resp["model_refresh_error"] = refreshErr.Error()
 			}
 			c.JSON(200, resp)
 			return
@@ -550,12 +565,19 @@ func (h *Handler) DeleteProxyURL(c *gin.Context) {
 	h.persist(c)
 }
 
-// DeleteClaudeCache clears the local cache files for Claude Code.
-func (h *Handler) DeleteClaudeCache(c *gin.Context) {
+// clearClaudeCodeCacheFiles removes the Claude Code client-side model/stats cache
+// files so the next session re-fetches a fresh list from the proxy. Shared by the
+// top "清空缓存" button (DeleteClaudeCache) and the pin-switch path (PutPinnedAccount).
+func clearClaudeCodeCacheFiles() {
 	home, err := os.UserHomeDir()
 	if err == nil && home != "" {
 		_ = os.Remove(filepath.Join(home, ".claude", "cache", "gateway-models.json"))
 		_ = os.Remove(filepath.Join(home, ".claude", "stats-cache.json"))
 	}
+}
+
+// DeleteClaudeCache clears the local cache files for Claude Code.
+func (h *Handler) DeleteClaudeCache(c *gin.Context) {
+	clearClaudeCodeCacheFiles()
 	c.JSON(200, gin.H{"status": "ok"})
 }

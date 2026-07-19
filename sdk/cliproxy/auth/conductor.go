@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -189,6 +190,14 @@ type Manager struct {
 	// onPinnedChange is called after any pin mutation with the full map snapshot.
 	// Used to persist pin state to SQLite. Protected by pinnedAuthsMu (called under lock).
 	onPinnedChange func(map[string]string)
+
+	// rediscoverFn is an optional callback that synchronously re-fetches the
+	// upstream model list for a given auth and overwrites its registry registration.
+	// Injected by the service layer so the conductor stays decoupled from Service.
+	// Used by the pin-switch path (PutPinnedAccount) to refresh the pinned relay's
+	// real model list, which otherwise may be stuck on a stale static catalog when
+	// the startup-time one-shot discovery failed (e.g. upstream was down at boot).
+	rediscoverFn func(ctx context.Context, auth *Auth, providerKey string) error
 
 	// authExecutors stores per-auth executor overrides.
 	// When an auth is synthesized from openai-compatibility with route-as,
@@ -472,6 +481,43 @@ func (m *Manager) SetOnPinnedChange(fn func(map[string]string)) {
 	m.pinnedAuthsMu.Lock()
 	m.onPinnedChange = fn
 	m.pinnedAuthsMu.Unlock()
+}
+
+// SetRediscoverFn injects the upstream model-discovery implementation. The
+// callback must synchronously fetch the relay's real model list and re-register
+// it under the given auth. It is invoked by RediscoverModelsForAuth.
+func (m *Manager) SetRediscoverFn(fn func(ctx context.Context, auth *Auth, providerKey string) error) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.rediscoverFn = fn
+	m.mu.Unlock()
+}
+
+// RediscoverModelsForAuth synchronously refreshes the model list for the given
+// auth from its upstream relay. It resolves the auth, derives the provider key
+// from auth.Provider (lowercased), and delegates to the injected rediscoverFn.
+// Returns nil (no-op) when the auth is missing, the provider key is empty, or
+// no rediscoverFn has been injected. Returns an error if the upstream fetch or
+// registration fails. This is the recovery path for relays whose startup-time
+// one-shot discovery failed, surfaced at the exact moment the user pins them.
+func (m *Manager) RediscoverModelsForAuth(ctx context.Context, authID string) error {
+	if m == nil || authID == "" {
+		return nil
+	}
+	m.mu.RLock()
+	auth, ok := m.auths[authID]
+	rediscover := m.rediscoverFn
+	m.mu.RUnlock()
+	if !ok || auth == nil {
+		return fmt.Errorf("rediscover: auth %s not found", authID)
+	}
+	providerKey := strings.ToLower(strings.TrimSpace(auth.Provider))
+	if providerKey == "" || rediscover == nil {
+		return nil
+	}
+	return rediscover(ctx, auth, providerKey)
 }
 
 // RestorePinnedAuths bulk-loads pinned state (e.g. from SQLite on startup).

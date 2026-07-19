@@ -112,6 +112,14 @@ func StartService(cfg *config.Config, configPath string, localPassword string) {
 				mgr.SetOnPinnedChange(func(pinned map[string]string) {
 					persistPinnedAuths(capturedDB, pinned)
 				})
+				// Inject the upstream model-discovery implementation so the
+				// pin-switch path (PutPinnedAccount) can synchronously refresh
+				// a relay's real model list, recovering from a stale static
+				// catalog left behind when startup-time one-shot discovery
+				// failed (e.g. the relay was down at boot).
+				mgr.SetRediscoverFn(func(ctx context.Context, auth *coreauth.Auth, providerKey string) error {
+					return svc.DiscoverModelsForAuthSync(ctx, auth, providerKey, nil)
+				})
 			}
 
 			// Seed in-memory usage statistics from SQLite so /v0/management/usage
